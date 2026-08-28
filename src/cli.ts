@@ -97,8 +97,13 @@ export async function run(argv: string[]): Promise<number> {
       writeCache({ ...cached, changed: false });
     } else {
       printResult(cached.help, cached.explanation);
-      const at = new Date(cached.updatedAt).toLocaleTimeString();
-      process.stderr.write(`（缓存于 ${at} 生成，后台静默校验中…）\n`);
+      if (cached.lastCheckedAt) {
+        const at = new Date(cached.lastCheckedAt).toLocaleString();
+        process.stderr.write(`（${at} 核查 · 命令帮助未改变，后台持续校验中…）\n`);
+      } else {
+        const at = new Date(cached.updatedAt).toLocaleString();
+        process.stderr.write(`（${at} 生成 · 后台校验中…）\n`);
+      }
       spawnRefresh(command);
     }
     return EXIT_OK;

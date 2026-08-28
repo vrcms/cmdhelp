@@ -138,7 +138,7 @@ describe('run', () => {
     expect(out).toContain('RM(1) manual');
     expect(out).toContain('删除文件（缓存版）');
     expect(out).toContain('缓存');
-    expect(out).toContain('后台静默校验');
+    expect(out).toContain('后台校验');
     expect(completeMock).not.toHaveBeenCalled();
     expect(fetchHelpMock).not.toHaveBeenCalled();
     expect(spawnMock).toHaveBeenCalledTimes(1);
