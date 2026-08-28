@@ -1,7 +1,0 @@
-{
-  "main": "./dist/cli.js",
-  "output": "./sea-prep/sea.blob",
-  "disableExperimentalSEAWarning": true,
-  "useSnapshot": false,
-  "useCodeCache": true
-}

@@ -5,8 +5,20 @@ node_modules/
 dist/
 coverage/
 
-# 本机插件状态
-.opencode/state/
+# 开发过程文档（不公开发布）
+AGENTS.md
+CONTEXT.md
+CONTEXT-*.md
+docs/
+.scratch/
+.opencode/
+sea-config.json
+sea-prep/
+
+# 二进制产物（走 Releases，不进 git）
+dist/bin/
+*.exe
+*.blob
 
 # 日志
 *.log
