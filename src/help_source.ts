@@ -9,7 +9,7 @@ export async function fetchHelp(command: string): Promise<string | null> {
     const cmd =
       '$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8;' +
       `Get-Help ${command} -Full | Out-String -Width 200`;
-    return runProcess('powershell', ['-NoProfile', '-Command', cmd], {});
+    return runProcess('powershell', ['-NoProfile', '-Command', cmd], { windowsHide: true });
   }
   return runProcess(
     'man',

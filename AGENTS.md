@@ -29,7 +29,7 @@
 - AI 输出结构：功能简述 + 常用参数说明 + 1-2 个典型示例（中文/按 `lang` 配置的语言）。
 - 输出排版：本地帮助原文（截断）→ 宽度自适应分隔线 → AI 解释（见 `cli.ts` 的 `separator()`）；`cmdhelp lang <代码>` 切换语言（默认 cn，任意代码，`CMDHELP_LANG` 环境变量覆盖，语言名映射在 `src/prompts.ts` 的 `LANGUAGE_NAMES`）。
 - 颜色：`src/color.ts`（NO_COLOR/FORCE_COLOR 规范，非 TTY 无色）+ `src/format.ts`（功能绿/参数黄/示例蓝/内联代码青/提示灰），`FORCE_COLOR=1` 可用于真机验证。
-- 查询缓存：`src/cache.ts` 存 `~/.cmdhelp/cache/<命令>__<语言>__<模式>.json`（`CMDHELP_CACHE_DIR` 可覆盖）；命中秒出旧结果后**进程内**再校验（重新 man/Get-Help 比对帮助 sha1，勿用 detached 子进程——Windows 必弹控制台窗口）；变化则重生成解释并标记 `changed`，下次运行直接输出新结果；缓存键含语言/模式自动隔离。
+- 查询缓存：`src/cache.ts` 存 `~/.cmdhelp/cache/<命令>__<语言>__<模式>.json`（`CMDHELP_CACHE_DIR` 可覆盖）；命中秒出旧结果后以 `detached + stdio ignore + windowsHide:true` 静默后台校验（重新 man/Get-Help 比对帮助 sha1，无变化不调 AI，有变化才重生成并标记 `changed` 下次直接输出新结果）；帮助获取在 Windows 下同样 `windowsHide:true` 避免弹窗；缓存键含语言/模式自动隔离。
 - 进度反馈：`src/feedback.ts` 的 `startSpinner()` 覆盖所有耗时操作（TTY 旋转动画/非 TTY 静态提示行），任何等待都必须有 stderr 反馈。
 
 ## 开发与发布命令
@@ -41,3 +41,26 @@
 
 - `.opencode/skills/continual-learning/` 插件会维护 AGENTS.md 的 `## Learned User Preferences` / `## Learned Workspace Facts` 两个区块，不要删除或改写这两个区块。
 - 本目录是 git 仓库（main 分支）；`.opencode/state/`（本机插件状态）与 `node_modules/`、`dist/` 已在 .gitignore 忽略，不要手动提交它们。
+
+## Learned User Preferences
+
+- 做软件就像做游戏，每一步操作都必须有明确反馈，覆盖空状态、加载中、成功、失败四态，写入 AGENTS.md 核心原则
+- 所有产出与交互保持中文
+- 偏好直接落地代码而非停留分析，并行批量执行，一次性收集上下文并给出完整修改
+- 要求彩色输出区分主要功能、重要参数、重要示例等信息层级
+- 讨厌额外弹窗，要求后台任务完全静默无窗口
+- 要求缓存二次运行时秒出旧结果，无变化时只做本地帮助 hash 对比不调用 AI
+- 要求首次运行等耗时操作即时给出加载进度反馈，禁止无反馈干等
+- 偏好自主决策与批量完成同类修改，减少往返确认
+
+## Learned Workspace Facts
+
+- 技术栈 TypeScript + Node≥18、零运行时依赖、包名 cmdhelp 通过 npx cmdhelp 发布
+- 安全红线：只取首 token 白名单校验，绝不执行目标命令，仅运行 man/Get-Help 且设超时 5s 与输出上限 200 行/5000 字符
+- 帮助获取 POSIX 用 man（MANPAGER=cat MANWIDTH=120），Windows 用 powershell Get-Help -Full 需 windowsHide:true 避免弹窗
+- 免费模式走 https://opencode.ai/zen/v1 固定模型 big-pickle，双通道 public/anon 自动切换并持久化 free_channel
+- 配置持久化于 ~/.cmdhelp/config.json（mode/free_channel/lang/base_url/api_key/model），CMDHELP_* 环境变量覆盖，非 TTY 只能走环境变量
+- 查询缓存路径 ~/.cmdhelp/cache/<命令>__<语言>__<模式>.json，CMDHELP_CACHE_DIR 可覆盖，缓存键含语言/模式自动隔离
+- 缓存策略为 stale-while-revalidate：命中秒出旧结果，后台以 detached + stdio ignore + windowsHide:true 静默校验 sha1，无变化不调 AI，有变化标记 changed 下次直接输出新结果
+- 输出排版为本地帮助原文（截断）→ 宽度自适应分隔线 → AI 解释，颜色由 src/color.ts + src/format.ts 实现，遵循 NO_COLOR/FORCE_COLOR 且非 TTY 无色
+- 进度反馈统一走 src/feedback.ts 的 startSpinner，TTY 旋转动画，非 TTY 静态提示行，覆盖所有耗时操作

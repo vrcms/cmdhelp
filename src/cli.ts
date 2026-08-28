@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { complete, type AiError, type CompleteOptions } from './ai_client.js';
@@ -97,8 +98,8 @@ export async function run(argv: string[]): Promise<number> {
     } else {
       printResult(cached.help, cached.explanation);
       const at = new Date(cached.updatedAt).toLocaleTimeString();
-      process.stderr.write(`（缓存于 ${at} 生成，正在后台校验帮助变化…）\n`);
-      await refreshCache(command);
+      process.stderr.write(`（缓存于 ${at} 生成，后台静默校验中…）\n`);
+      spawnRefresh(command);
     }
     return EXIT_OK;
   }
@@ -193,52 +194,6 @@ async function explain(
   }
 }
 
-async function refreshCache(command: string): Promise<void> {
-  const key = cacheKey(command, getLang(), getMode());
-  const cached = readCache(key);
-  if (!cached) return;
-  const stopCheck = startSpinner('正在校验命令帮助是否有变化…');
-  const help = await fetchHelp(command);
-  const hash = hashHelp(help);
-  if (hash === cached.helpHash) {
-    stopCheck();
-    writeCache({ ...cached, lastCheckedAt: Date.now() });
-    process.stderr.write('（校验完成：命令帮助无变化）\n');
-    return;
-  }
-  stopCheck();
-  process.stderr.write('（命令帮助有变化，正在重新生成解释…）\n');
-  const stopAi = startSpinner('正在生成新解释…');
-  try {
-    const ai = resolveAi();
-    if (!ai) {
-      throw new Error('未配置 AI 接口');
-    }
-    const messages = [
-      { role: 'system' as const, content: buildSystemPrompt(cached.lang) },
-      { role: 'user' as const, content: buildUserPrompt(command, help) },
-    ];
-    const explanation = ai.freeTier
-      ? await completeFree(ai.config, messages)
-      : await complete(ai.config, messages);
-    writeCache({
-      ...cached,
-      help,
-      explanation,
-      helpHash: hash,
-      updatedAt: Date.now(),
-      lastCheckedAt: Date.now(),
-      changed: true,
-    });
-    process.stderr.write('（已重新生成，下次运行将显示新版结果）\n');
-  } catch {
-    writeCache({ ...cached, lastCheckedAt: Date.now() });
-    process.stderr.write('（更新失败：AI 不可用，下次仍将使用旧结果）\n');
-  } finally {
-    stopAi();
-  }
-}
-
 async function refresh(command: string): Promise<void> {
   const key = cacheKey(command, getLang(), getMode());
   const cached = readCache(key);
@@ -282,6 +237,20 @@ function printResult(help: string | null, explanation: string | null): void {
   }
   if (explanation) {
     console.log(formatExplanation(explanation));
+  }
+}
+
+function spawnRefresh(command: string): void {
+  try {
+    const cliPath = fileURLToPath(import.meta.url);
+    const child = spawn(process.execPath, [cliPath, 'refresh', command], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.unref();
+  } catch {
+    // 静默失败，不影响主流程
   }
 }
 

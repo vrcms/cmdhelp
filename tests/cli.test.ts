@@ -31,12 +31,17 @@ vi.mock('../src/cache.js', async () => {
     writeCache: vi.fn(),
   };
 });
+vi.mock('node:child_process', async () => {
+  const actual = await import('node:child_process');
+  return { ...actual, spawn: vi.fn(() => ({ unref: vi.fn() })) };
+});
 
 import { getLang, getMode, loadConfig, setLang, setMode } from '../src/config.js';
 import { fetchHelp } from '../src/help_source.js';
 import { complete } from '../src/ai_client.js';
 import { completeFree } from '../src/free_client.js';
 import { readCache, writeCache, hashHelp } from '../src/cache.js';
+import { spawn } from 'node:child_process';
 import { run } from '../src/cli.js';
 
 const loadConfigMock = vi.mocked(loadConfig);
@@ -49,6 +54,7 @@ const getModeMock = vi.mocked(getMode);
 const setModeMock = vi.mocked(setMode);
 const readCacheMock = vi.mocked(readCache);
 const writeCacheMock = vi.mocked(writeCache);
+const spawnMock = vi.mocked(spawn);
 
 const CONFIG = { base_url: 'http://127.0.0.1:11434/v1', api_key: '', model: 'llama3.1' };const CACHED = {
   command: 'rm',
@@ -89,6 +95,7 @@ describe('run', () => {
     setModeMock.mockReset();
     readCacheMock.mockReset();
     writeCacheMock.mockReset();
+    spawnMock.mockReset();
   });
 
   it('坏输入：拒绝并解释白名单规则', async () => {
@@ -124,7 +131,6 @@ describe('run', () => {
   it('缓存命中（无变化）→ 秒出缓存并后台 spawn refresh', async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     readCacheMock.mockReturnValue({ ...CACHED, helpHash: hashHelp('RM(1) manual') });
-    fetchHelpMock.mockResolvedValue('RM(1) manual');
     const [lines, spy, errSpy] = capture('ERR:');
     const code = await run(['rm']);
     expect(code).toBe(0);
@@ -132,68 +138,12 @@ describe('run', () => {
     expect(out).toContain('RM(1) manual');
     expect(out).toContain('删除文件（缓存版）');
     expect(out).toContain('缓存');
-    expect(out).toContain('后台校验');
+    expect(out).toContain('后台静默校验');
     expect(completeMock).not.toHaveBeenCalled();
-    spy.mockRestore();
-    errSpy.mockRestore();
-  });
-
-  it('缓存命中 → 结果立即输出后进程内校验，帮助无变化时更新检查时间', async () => {
-    loadConfigMock.mockReturnValue(CONFIG);
-    readCacheMock.mockReturnValue({ ...CACHED, helpHash: hashHelp('RM(1) manual') });
-    fetchHelpMock.mockResolvedValue('RM(1) manual');
-    const [lines, spy, errSpy] = capture('ERR:');
-    const code = await run(['rm']);
-    expect(code).toBe(0);
-    const out = lines.join('\n');
-    expect(out).toContain('删除文件（缓存版）');
-    expect(out).toContain('校验完成：命令帮助无变化');
-    expect(fetchHelpMock).toHaveBeenCalledWith('rm');
-    expect(completeMock).not.toHaveBeenCalled();
-    expect(writeCacheMock).toHaveBeenCalledWith(
-      expect.objectContaining({ helpHash: hashHelp('RM(1) manual'), lastCheckedAt: expect.any(Number) }),
-    );
-    spy.mockRestore();
-    errSpy.mockRestore();
-  });
-
-  it('缓存校验发现帮助有变化 → 进程内重新生成并标记 changed', async () => {
-    loadConfigMock.mockReturnValue(CONFIG);
-    readCacheMock.mockReturnValue({ ...CACHED, help: 'OLD manual', helpHash: 'oldhash' });
-    fetchHelpMock.mockResolvedValue('NEW manual v2');
-    completeMock.mockResolvedValue('### 功能\n新版本解释');
-    const [lines, spy, errSpy] = capture('ERR:');
-    const code = await run(['rm']);
-    expect(code).toBe(0);
-    const out = lines.join('\n');
-    expect(out).toContain('删除文件（缓存版）');
-    expect(out).toContain('命令帮助有变化');
-    expect(out).toContain('下次运行将显示新版结果');
-    expect(writeCacheMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        help: 'NEW manual v2',
-        explanation: '### 功能\n新版本解释',
-        changed: true,
-        lastCheckedAt: expect.any(Number),
-      }),
-    );
-    spy.mockRestore();
-    errSpy.mockRestore();
-  });
-
-  it('缓存校验时 AI 失败 → 保留旧结果并提示', async () => {
-    loadConfigMock.mockReturnValue(CONFIG);
-    readCacheMock.mockReturnValue({ ...CACHED, help: 'OLD manual', helpHash: 'oldhash' });
-    fetchHelpMock.mockResolvedValue('NEW manual v2');
-    completeMock.mockRejectedValue(new Error('boom'));
-    const [lines, spy, errSpy] = capture('ERR:');
-    const code = await run(['rm']);
-    expect(code).toBe(0);
-    const out = lines.join('\n');
-    expect(out).toContain('更新失败');
-    expect(writeCacheMock).toHaveBeenCalledWith(
-      expect.objectContaining({ changed: false, lastCheckedAt: expect.any(Number) }),
-    );
+    expect(fetchHelpMock).not.toHaveBeenCalled();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock.mock.calls[0]![1]).toEqual(expect.arrayContaining([expect.stringContaining('refresh'), 'rm']));
+    expect(spawnMock.mock.calls[0]![2]).toMatchObject({ detached: true, windowsHide: true, stdio: 'ignore' });
     spy.mockRestore();
     errSpy.mockRestore();
   });
@@ -208,6 +158,7 @@ describe('run', () => {
     expect(out).toContain('有更新');
     expect(writeCacheMock).toHaveBeenCalledWith(expect.objectContaining({ changed: false }));
     expect(fetchHelpMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
     spy.mockRestore();
     errSpy.mockRestore();
   });
