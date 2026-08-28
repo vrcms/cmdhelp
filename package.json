@@ -1,0 +1,35 @@
+{
+  "name": "cmdhelp",
+  "version": "0.1.0",
+  "description": "命令行智能助手：npx cmdhelp <命令名>，基于本地 man/Get-Help 帮助文档 + AI 生成通俗中文解释",
+  "type": "module",
+  "bin": {
+    "cmdhelp": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "cli",
+    "man",
+    "help",
+    "ai",
+    "command",
+    "explain"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^3.0.0"
+  }
+}
