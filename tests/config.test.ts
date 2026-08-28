@@ -11,9 +11,11 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import {
   PRESETS,
   getFreeChannel,
+  getLang,
   getMode,
   mergeConfig,
   setFreeChannel,
+  setLang,
   setMode,
 } from '../src/config.js';
 
@@ -106,5 +108,38 @@ describe('getMode / setMode', () => {
     const [, content] = writeMock.mock.calls[0] as unknown as [string, string];
     const parsed = JSON.parse(content);
     expect(parsed).toMatchObject({ mode: 'free', base_url: 'http://x/v1', model: 'm', free_channel: 'anon' });
+  });
+});
+
+describe('getLang / setLang', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it('无配置无环境变量时默认中文 cn', () => {
+    readMock.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    expect(getLang()).toBe('cn');
+  });
+
+  it('读配置文件语言', () => {
+    readMock.mockReturnValue('{"lang":"ja"}' as never);
+    expect(getLang()).toBe('ja');
+  });
+
+  it('环境变量 CMDHELP_LANG 覆盖文件配置', () => {
+    readMock.mockReturnValue('{"lang":"ja"}' as never);
+    vi.stubEnv('CMDHELP_LANG', 'en');
+    expect(getLang()).toBe('en');
+  });
+
+  it('setLang 保留其他字段', () => {
+    readMock.mockReturnValue('{"mode":"free","free_channel":"anon"}' as never);
+    setLang('fr');
+    const [, content] = writeMock.mock.calls[0] as unknown as [string, string];
+    const parsed = JSON.parse(content);
+    expect(parsed).toMatchObject({ mode: 'free', free_channel: 'anon', lang: 'fr' });
   });
 });

@@ -60,6 +60,9 @@
 - **免费双通道自动切换**（`src/free_client.ts`）：免费池有 public（`Bearer public`）与匿名（无 Authorization，`User-Agent: opencode` + `HTTP-Referer: https://hermes-agent.nousresearch.com` + `X-Title: Hermes Agent`）两个通道，配额相互独立。优先通道失败（401/403/429）即切换另一通道；成功则把通道记录持久化到 `~/.cmdhelp/config.json` 的 `free_channel`（下次直接走该通道），双通道均失败则回退 public 并给限流专属提示。网络类错误不切换。
 - `cmdhelp setup`：配置自己的 AI 模型（写入 config 后模式自动转 custom，可 `free on` 切回）。
 - 模式与通道持久化在 `~/.cmdhelp/config.json`（`mode` 与 `free_channel` 字段），自定义接口配置字段不受开关影响。
+- **输出排版**：先原样输出本地帮助原文（截断后），再输出终端宽度自适应分隔线（`─`，置灰），最后是 AI 通俗解释；帮助不可用时仅有提示行 + AI 解释。
+- **彩色输出**（`src/color.ts` + `src/format.ts`）：AI 解释的 `### 功能`（绿）、`### 常用参数`（黄）、`### 示例`（蓝）分节标题着色，行内 `\`参数名\`` 青色，回退提示行置灰；遵循 `NO_COLOR`（强制关）与 `FORCE_COLOR`（强制开）规范，非 TTY/管道自动无色降级。
+- **多语言**：`cmdhelp lang <代码>` 切换解释语言（默认 `cn`，任意代码均可，内置 cn/en/ja/fr/ru/de/ko/es/pt/it 名称映射，未知代码原样传给模型）；`cmdhelp lang` 查看当前；持久化在 config 的 `lang` 字段，环境变量 `CMDHELP_LANG` 覆盖（优先级 env > 文件 > cn）。语言注入 system 提示词首行。
 - 输出：AI 三段 markdown（`###` 标题）原样打印到 stdout；诊断信息走 stderr。
 - MVP 不做：`--raw`、交互追问、缓存、shell 集成、危险命令预警（全部后移 v2，见 readme §7）。
 

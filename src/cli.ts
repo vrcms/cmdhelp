@@ -8,13 +8,16 @@ import {
   FREE_PRESET,
   PRESETS,
   configPath,
+  getLang,
   getMode,
   loadConfig,
   saveConfig,
+  setLang,
   setMode,
   type Config,
 } from './config.js';
 import { completeFree } from './free_client.js';
+import { dimLine, formatExplanation } from './format.js';
 import { fetchHelp } from './help_source.js';
 import { buildSystemPrompt, buildUserPrompt } from './prompts.js';
 import { extractCommand } from './tokenize.js';
@@ -47,6 +50,20 @@ export async function run(argv: string[]): Promise<number> {
   }
   if (first === 'free') {
     return handleFree(argv.slice(1));
+  }
+  if (first === 'lang') {
+    if (argv.length < 2) {
+      process.stdout.write(`当前解释语言：${getLang()}。可用 cmdhelp lang <代码> 切换（如 cn/en/ja/fr/ru）。\n`);
+      return EXIT_OK;
+    }
+    const code = argv[1].toLowerCase();
+    if (!/^[a-z]{2,8}$/.test(code)) {
+      process.stderr.write('错误：语言代码无效（2-8 位字母，如 cn/en/ja）。\n');
+      return EXIT_BAD_INPUT;
+    }
+    setLang(code);
+    process.stdout.write(`解释语言已切换为 ${code}。\n`);
+    return EXIT_OK;
   }
 
   const raw = argv.join(' ');
@@ -98,8 +115,9 @@ async function explain(
   aiOpts: CompleteOptions & { freeTier?: boolean } = {},
 ): Promise<number> {
   const help = await fetchHelp(command);
+  const lang = getLang();
   const messages = [
-    { role: 'system' as const, content: buildSystemPrompt() },
+    { role: 'system' as const, content: buildSystemPrompt(lang) },
     { role: 'user' as const, content: buildUserPrompt(command, help) },
   ];
 
@@ -107,15 +125,19 @@ async function explain(
     const explanation = aiOpts.freeTier
       ? await completeFree(config, messages)
       : await complete(config, messages, aiOpts);
-    if (!help) {
+    if (help) {
+      console.log(help);
+      console.log(dimLine(separator()));
+    } else {
       console.log('注：本地帮助不可用，以下基于通用知识，可能与当前系统版本有差异。\n');
     }
-    console.log(explanation);
+    console.log(formatExplanation(explanation));
     return EXIT_OK;
   } catch (err) {
     if (help) {
-      process.stderr.write('AI 调用失败，展示本地帮助原文：\n');
       console.log(help);
+      console.log(dimLine(separator()));
+      process.stderr.write('AI 解释失败，以上为本地帮助原文；\n');
     }
     if (aiOpts.freeTier && (err as AiError).status === 429) {
       process.stderr.write(
@@ -128,11 +150,18 @@ async function explain(
   }
 }
 
+function separator(): string {
+  const width = process.stdout.columns && process.stdout.columns > 20 ? process.stdout.columns : 60;
+  return '─'.repeat(width);
+}
+
 async function printUsage(): Promise<void> {
   console.log(`cmdhelp v${VERSION} — 命令行智能助手
 用法：cmdhelp <命令名>
       cmdhelp free on|off   开启/关闭免费模式（big-pickle，无需配置）
       cmdhelp setup         配置自己的 AI 模型
+      cmdhelp lang <代码>   设置解释语言（默认 cn，支持 en/ja/fr/ru 等）
+      cmdhelp lang          查看当前语言
 示例：cmdhelp rm
 
 说明：只查询 man/Get-Help 本地帮助文档，绝不执行目标命令；免费模式受限流影响，查不到时可 setup 配置其他服务。

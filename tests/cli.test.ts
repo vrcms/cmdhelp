@@ -6,6 +6,8 @@ vi.mock('../src/config.js', () => ({
   saveConfig: vi.fn(),
   getMode: vi.fn(),
   setMode: vi.fn(),
+  getLang: vi.fn(() => 'cn'),
+  setLang: vi.fn(),
   FREE_PRESET: {
     name: 'OpenCode AI 免费模型（big-pickle，无需注册）',
     base_url: 'https://opencode.ai/zen/v1',
@@ -22,7 +24,7 @@ vi.mock('../src/help_source.js', () => ({ fetchHelp: vi.fn() }));
 vi.mock('../src/ai_client.js', () => ({ complete: vi.fn() }));
 vi.mock('../src/free_client.js', () => ({ completeFree: vi.fn() }));
 
-import { getMode, loadConfig, setMode } from '../src/config.js';
+import { getLang, getMode, loadConfig, setLang, setMode } from '../src/config.js';
 import { fetchHelp } from '../src/help_source.js';
 import { complete } from '../src/ai_client.js';
 import { completeFree } from '../src/free_client.js';
@@ -32,6 +34,8 @@ const loadConfigMock = vi.mocked(loadConfig);
 const fetchHelpMock = vi.mocked(fetchHelp);
 const completeMock = vi.mocked(complete);
 const completeFreeMock = vi.mocked(completeFree);
+const getLangMock = vi.mocked(getLang);
+const setLangMock = vi.mocked(setLang);
 const getModeMock = vi.mocked(getMode);
 const setModeMock = vi.mocked(setMode);
 
@@ -57,6 +61,8 @@ describe('run', () => {
     fetchHelpMock.mockReset();
     completeMock.mockReset();
     completeFreeMock.mockReset();
+    getLangMock.mockReturnValue('cn');
+    setLangMock.mockReset();
     getModeMock.mockReturnValue('custom');
     setModeMock.mockReset();
   });
@@ -70,15 +76,32 @@ describe('run', () => {
     errSpy.mockRestore();
   });
 
-  it('成功流：帮助可用 + AI 成功 → 直接输出解释', async () => {
+  it('成功流：帮助原文 + 分隔线 + AI 解释', async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     fetchHelpMock.mockResolvedValue('RM(1) manual');
     completeMock.mockResolvedValue('### 功能\n删除文件');
     const [lines, spy, errSpy] = capture('ERR:');
     const code = await run(['rm', '-rf', '/']);
     expect(code).toBe(0);
-    expect(lines.join('\n')).toBe('### 功能\n删除文件');
+    const out = lines.join('\n');
+    expect(out).toContain('RM(1) manual');
+    expect(out).toContain('────────');
+    expect(out).toContain('### 功能\n删除文件');
+    expect(out.indexOf('RM(1) manual')).toBeLessThan(out.indexOf('### 功能'));
     expect(fetchHelpMock).toHaveBeenCalledWith('rm');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('语言设置传入 AI（en 时提示词使用英文）', async () => {
+    getLangMock.mockReturnValue('en');
+    loadConfigMock.mockReturnValue(CONFIG);
+    fetchHelpMock.mockResolvedValue('RM(1) manual');
+    completeMock.mockResolvedValue('### Description\nDelete files');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['rm']);
+    expect(code).toBe(0);
+    expect(lines.join('\n')).toContain('### Description');
     spy.mockRestore();
     errSpy.mockRestore();
   });
@@ -104,7 +127,37 @@ describe('run', () => {
     const code = await run(['rm']);
     expect(code).toBe(1);
     expect(lines.join('\n')).toContain('RM(1) manual');
+    expect(lines.join('\n')).toContain('本地帮助原文');
     expect(lines.join('\n')).toContain('AI 调用失败');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('lang 查看当前语言', async () => {
+    getLangMock.mockReturnValue('ja');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['lang']);
+    expect(code).toBe(0);
+    expect(lines.join('\n')).toContain('ja');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('lang 切换语言并持久化', async () => {
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['lang', 'ja']);
+    expect(code).toBe(0);
+    expect(setLangMock).toHaveBeenCalledWith('ja');
+    expect(lines.join('\n')).toContain('已切换为 ja');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('lang 拒绝非法代码', async () => {
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['lang', 'e-1']);
+    expect(code).toBe(2);
+    expect(setLangMock).not.toHaveBeenCalled();
     spy.mockRestore();
     errSpy.mockRestore();
   });

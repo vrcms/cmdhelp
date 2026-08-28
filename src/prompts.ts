@@ -1,5 +1,26 @@
-export function buildSystemPrompt(): string {
-  return `你是一名命令行助手，用通俗易懂的中文解释命令行工具。
+const LANGUAGE_NAMES: Record<string, string> = {
+  cn: '中文',
+  zh: '中文',
+  zhcn: '中文',
+  en: '英文（English）',
+  ja: '日语（日本語）',
+  jp: '日语（日本語）',
+  fr: '法语（Français）',
+  de: '德语（Deutsch）',
+  ru: '俄语（Русский）',
+  ko: '韩语（한국어）',
+  es: '西班牙语（Español）',
+  pt: '葡萄牙语（Português）',
+  it: '意大利语（Italiano）',
+};
+
+export function languageName(code: string): string {
+  const key = code.toLowerCase().replace(/[-_]/g, '');
+  return LANGUAGE_NAMES[key] ?? code;
+}
+
+export function buildSystemPrompt(lang = 'cn'): string {
+  return `你是一名命令行助手，请使用【${languageName(lang)}】输出全部内容（包括所有标题、说明与示例）。
 
 输出必须严格使用以下三个 Markdown 三级标题小节：
 

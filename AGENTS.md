@@ -22,7 +22,9 @@
 - AI 客户端只用 OpenAI 兼容 `POST {base_url}/chat/completions`；Ollama 即 `base_url=http://127.0.0.1:11434/v1`（见 ADR-0001）。
 - `cmdhelp free on|off` 开关免费模式（持久化在 `~/.cmdhelp/config.json` 的 `mode` 字段）：开启后查询自动直连 OpenCode 免费池（`https://opencode.ai/zen/v1`，`Authorization: Bearer public`，固定模型 `big-pickle`，头 `x-opencode-client: desktop`）；`free_client.ts` 实现双通道自动切换——public 失败（401/403/429）即试匿名通道（无 Authorization，`User-Agent: opencode` + hermes `HTTP-Referer`/`X-Title` 头），成功记 `free_channel: anon` 供下次直达，双败回退 public 并给限流提示，不改模型。
 - 配置：首次运行或 `cmdhelp setup` 引导写入 `~/.cmdhelp/config.json`（`base_url`/`api_key`/`model`），内置免费服务预设（智谱 GLM-Flash 等，见 `src/config.ts` 的 `PRESETS`）；环境变量 `CMDHELP_*` 覆盖，非 TTY 时只能走环境变量。
-- AI 输出结构：功能简述 + 常用参数说明 + 1-2 个典型示例（中文）。
+- AI 输出结构：功能简述 + 常用参数说明 + 1-2 个典型示例（中文/按 `lang` 配置的语言）。
+- 输出排版：本地帮助原文（截断）→ 宽度自适应分隔线 → AI 解释（见 `cli.ts` 的 `separator()`）；`cmdhelp lang <代码>` 切换语言（默认 cn，任意代码，`CMDHELP_LANG` 环境变量覆盖，语言名映射在 `src/prompts.ts` 的 `LANGUAGE_NAMES`）。
+- 颜色：`src/color.ts`（NO_COLOR/FORCE_COLOR 规范，非 TTY 无色）+ `src/format.ts`（功能绿/参数黄/示例蓝/内联代码青/提示灰），`FORCE_COLOR=1` 可用于真机验证。
 
 ## 开发与发布命令
 

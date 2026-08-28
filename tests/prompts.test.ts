@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { buildSystemPrompt, buildUserPrompt } from '../src/prompts.js';
+import { buildSystemPrompt, buildUserPrompt, languageName } from '../src/prompts.js';
+
+describe('languageName', () => {
+  it('常见语言代码映射为对应语言名', () => {
+    expect(languageName('cn')).toBe('中文');
+    expect(languageName('zh-CN')).toBe('中文');
+    expect(languageName('EN')).toBe('英文（English）');
+    expect(languageName('ja')).toBe('日语（日本語）');
+    expect(languageName('ru')).toBe('俄语（Русский）');
+  });
+
+  it('未知代码原样返回', () => {
+    expect(languageName('xx')).toBe('xx');
+  });
+});
 
 describe('buildSystemPrompt', () => {
   it('包含三段输出结构与来源标注约束', () => {
@@ -8,6 +22,12 @@ describe('buildSystemPrompt', () => {
     expect(p).toContain('### 常用参数');
     expect(p).toContain('### 示例');
     expect(p).toContain('本地帮助不可用');
+  });
+
+  it('按指定语言输出', () => {
+    expect(buildSystemPrompt('en')).toContain('英文（English）');
+    expect(buildSystemPrompt('ja')).toContain('日语（日本語）');
+    expect(buildSystemPrompt('cn')).toContain('中文');
   });
 });
 

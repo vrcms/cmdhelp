@@ -14,6 +14,7 @@ type FreeChannel = 'public' | 'anon';
 interface Settings {
   mode?: Mode;
   free_channel?: FreeChannel;
+  lang?: string;
   base_url?: string;
   api_key?: string;
   model?: string;
@@ -95,6 +96,16 @@ export function getFreeChannel(): 'public' | 'anon' {
 
 export function setFreeChannel(channel: 'public' | 'anon'): void {
   writeSettings({ ...fileConfig(), free_channel: channel });
+}
+
+const DEFAULT_LANG = 'cn';
+
+export function getLang(): string {
+  return process.env.CMDHELP_LANG ?? fileConfig().lang ?? DEFAULT_LANG;
+}
+
+export function setLang(lang: string): void {
+  writeSettings({ ...fileConfig(), lang });
 }
 
 export function mergeConfig(
