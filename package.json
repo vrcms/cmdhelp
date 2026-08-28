@@ -1,6 +1,6 @@
 {
   "name": "cmdhelp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "命令行智能助手：npx cmdhelp <命令名>，基于本地 man/Get-Help 帮助文档 + AI 生成通俗中文解释",
   "type": "module",
   "bin": {
@@ -16,7 +16,11 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "prepublishOnly": "npm run build && npm test"
+    "prepublishOnly": "npm run build && npm test",
+    "binary": "npm run build && pkg dist/cli.js --targets node18-win-x64,node18-linux-x64 --output dist/bin/cmdhelp",
+    "binary:win": "npm run build && pkg dist/cli.js --targets node18-win-x64 --output dist/bin/cmdhelp.exe",
+    "binary:linux": "npm run build && pkg dist/cli.js --targets node18-linux-x64 --output dist/bin/cmdhelp-linux",
+    "binary:sea": "node scripts/build-sea.mjs"
   },
   "keywords": [
     "cli",
@@ -29,7 +33,12 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "pkg": "^5.8.1",
     "typescript": "^5.5.0",
     "vitest": "^3.0.0"
+  },
+  "pkg": {
+    "assets": [],
+    "targets": ["node18-win-x64", "node18-linux-x64"]
   }
 }
