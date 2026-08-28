@@ -37,6 +37,17 @@
 - 构建：`npm run build`（tsc → dist/）；测试：`npm test`（vitest）；静态检查靠 `tsc --strict`，无 eslint。
 - 发布到 npm：包名 `cmdhelp` 已保留，`npm publish` 前 `prepublishOnly` 自动跑 build + test。
 
+## 命令执行规范（防卡死）
+
+- **执行前打时间戳**：所有 `bash` / 子进程操作前必须先输出 `[HH:MM:SS] start <命令>`，结束后再输出 `[HH:MM:SS] done (<耗时>s)`，用于判断是否阻塞、执行了多久。
+- 超时 5s、输出上限 20k 的子进程（`man`/`Get-Help`/`help`）必须带 `timeout` 与 `windowsHide:true`，避免静默卡死。
+- 长耗时（>2s）操作必须走 `src/feedback.ts` 的 `startSpinner()`，禁止无反馈干等。
+
+## 代码体积规范
+
+- **所有 JS 源码文件尽量 <10k，>20k 必须拆分**：单文件过大难以维护，超过 20k 触发强制拆分（按职责拆模块/子文件），10k-20k 为预警区需关注。
+- 当前 `src/cli.ts` 约 14k（`dist/cli.js` 15k）已处预警区，后续新增功能优先拆到 `src/answer.ts` / `src/cache_refresh.ts` 等子模块，保持主入口精简。
+
 ## 其他
 
 - `.opencode/skills/continual-learning/` 插件会维护 AGENTS.md 的 `## Learned User Preferences` / `## Learned Workspace Facts` 两个区块，不要删除或改写这两个区块。

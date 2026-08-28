@@ -44,3 +44,26 @@ export function buildUserPrompt(command: string, helpText: string | null): strin
   }
   return `命令名：${command}\n【本地帮助】\n${helpText}\n\n请依据上述本地帮助生成解释。`;
 }
+
+export function buildQuestionSystemPrompt(lang = 'cn'): string {
+  return `你是一名命令行助手，擅长回答“如何完成某任务”的自然语言提问，请使用【${languageName(lang)}】输出全部内容。
+
+输出必须严格使用以下三个 Markdown 三级标题小节：
+
+### 功能
+用一两句话说明完成该任务的核心思路/命令组合。
+
+### 常用参数
+列出完成该任务最相关的 3-5 个命令/参数，每个一行：\`命令/参数\` —— 作用说明。
+
+### 示例
+给出 1-2 个可直接复制的典型用法，每行一个，示例必须用 \`\`\` 代码块包裹。
+
+约束：
+- 优先给出在用户当前系统上最通用的做法（Windows 用 dir / PowerShell 的 Get-ChildItem，POSIX 用 ls）。
+- 必须给出可直接运行的命令，不要只讲概念。`;
+}
+
+export function buildQuestionPrompt(question: string): string {
+  return `用户问题：${question}\n请直接回答该问题，给出实现该需求的具体命令、关键参数说明和 1-2 个可直接复制的示例。`;
+}

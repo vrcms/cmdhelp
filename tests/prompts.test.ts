@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { buildSystemPrompt, buildUserPrompt, languageName } from '../src/prompts.js';
+import {
+  buildQuestionPrompt,
+  buildQuestionSystemPrompt,
+  buildSystemPrompt,
+  buildUserPrompt,
+  languageName,
+} from '../src/prompts.js';
 
 describe('languageName', () => {
   it('常见语言代码映射为对应语言名', () => {
@@ -43,5 +49,25 @@ describe('buildUserPrompt', () => {
     const p = buildUserPrompt('foo', null);
     expect(p).toContain('命令名：foo');
     expect(p).toContain('【本地帮助不可用】');
+  });
+});
+
+describe('buildQuestionPrompt', () => {
+  it('自然语言提问携带用户问题', () => {
+    const p = buildQuestionPrompt('如何列目录');
+    expect(p).toContain('如何列目录');
+    expect(p).toContain('用户问题');
+  });
+
+  it('自然语言系统提示词包含三段结构与语言', () => {
+    const p = buildQuestionSystemPrompt('cn');
+    expect(p).toContain('### 功能');
+    expect(p).toContain('### 常用参数');
+    expect(p).toContain('### 示例');
+    expect(p).toContain('中文');
+  });
+
+  it('英文系统提示词正确', () => {
+    expect(buildQuestionSystemPrompt('en')).toContain('英文（English）');
   });
 });

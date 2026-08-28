@@ -442,4 +442,57 @@ describe('run', () => {
     spy.mockRestore();
     errSpy.mockRestore();
   });
+
+  it('自然语言提问（中文）直接走 AI，不查本地帮助', async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    readCacheMock.mockReturnValue(null);
+    completeMock.mockResolvedValue('### 功能\n列目录的核心是 ls/dir');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['如何列目录']);
+    expect(code).toBe(0);
+    expect(fetchHelpMock).not.toHaveBeenCalled();
+    expect(writeCacheMock).not.toHaveBeenCalled();
+    const messages = completeMock.mock.calls[0]![1] as Array<{ content: string }>;
+    expect(messages[1].content).toContain('如何列目录');
+    expect(lines.join('\n')).toContain('列目录');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('自然语言提问（英文 how to）直接走 AI', async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    readCacheMock.mockReturnValue(null);
+    completeMock.mockResolvedValue('### 功能\nList files');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['how', 'to', 'list', 'files?']);
+    expect(code).toBe(0);
+    expect(fetchHelpMock).not.toHaveBeenCalled();
+    const messages = completeMock.mock.calls[0]![1] as Array<{ content: string }>;
+    expect(messages[1].content).toContain('how to list files?');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('自然语言提问在免费模式下走免费池', async () => {
+    getModeMock.mockReturnValue('free');
+    completeFreeMock.mockResolvedValue('### 功能\n免费回答');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['如何列目录']);
+    expect(code).toBe(0);
+    expect(completeFreeMock).toHaveBeenCalled();
+    expect(fetchHelpMock).not.toHaveBeenCalled();
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('含中文的长句即使首 token 合法也视为提问', async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    completeMock.mockResolvedValue('### 功能\n回答');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['如何', '使用', 'git', 'clone']);
+    expect(code).toBe(0);
+    expect(fetchHelpMock).not.toHaveBeenCalled();
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
 });

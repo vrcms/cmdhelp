@@ -1,143 +1,141 @@
-# CmdHelp - 命令行智能助手项目需求文档
+# cmdhelp — 命令行智能助手
 
-## 1\. 项目概述
+> `npx cmdhelp <命令/提问>` · 本地 `man/help/Get-Help` + AI 通俗解释 · 零运行时依赖 · `Node >= 18`
 
-**项目名称**：CmdHelp  
-**项目类型**：命令行工具  
-**核心功能**：帮助用户理解并解释各种命令行命令的功能、参数及用法，通过调用本地帮助文档（man/Get-Help）并结合 AI 大模型，生成通俗易懂的解释和示例。  
-**目标用户**：命令行新手、偶尔使用某些命令的开发者、需要快速了解命令功能的用户。
+[![npm version](https://img.shields.io/npm/v/cmdhelp)](https://www.npmjs.com/package/cmdhelp)
+[![node](https://img.shields.io/badge/node-%3E%3D18-green)](https://nodejs.org)
+[![license](https://img.shields.io/badge/license-MIT-blue)](#license)
 
-## 2\. 背景与痛点
+给命令行新手和“偶尔用一次”的开发者：输一个命令名，秒出**功能简述 + 常用参数 + 1-2 个可直接抄的示例**。绝不执行目标命令，只读本地帮助文档。
 
-* 现代命令行工具参数众多，用户难以记住所有参数及作用。
-* 传统帮助信息（如 `--help`、`man` 页面）通常内容冗长、专业术语多，不易快速理解。
-* 不同平台（Linux/Windows/macOS）帮助系统差异大，用户查询不便。
-* 用户需要一个能快速、安全地获取命令解释的工具。
+## 特性
 
-## 3\. 目标与功能需求
+- **安全第一**：只取首 token 做查询，只运行 `help` / `man` / `Get-Help`，绝不跑 `<命令> --help` / `/?`；`execFile` 参数列表 + `timeout 5s` + `20k/200行` 截断
+- **自然语言直答**：`cmdhelp 如何列目录` / `cmdhelp how to list files` 自动识别为提问，直接走 AI，无需本地帮助，同样输出三段式（功能/参数/示例）
+- **Windows 本地优先**：`help <命令>`（50ms，cmd 内部如 `dir/copy`）→ `man <命令>`（Git Bash）→ `Get-Help -Full`（PowerShell 兜底）→ 最后才走 AI 网络；中文 GBK 自动转码，无乱码
+- **秒出 + 后台校验**：`~/.cmdhelp/cache/<命令>__<语言>__<模式>.json` 缓存，二次命中秒出旧结果，后台 `detached + windowsHide` 静默校验 `sha1`，无变化不调 AI
+- **彩色 + 进度**：`功能绿/参数黄/示例蓝/代码青`，`NO_COLOR/FORCE_COLOR` 兼容；`startSpinner()` 覆盖所有等待（TTY 动画 / 非 TTY 提示行）
+- **多语言**：`cmdhelp lang <代码>` 任意语言，`CMDHELP_LANG` 覆盖
+- **双 AI 通道**：免费池 `big-pickle` 双通道 `public/anon` 自动切换，或 `cmdhelp setup` 配任意 OpenAI 兼容接口 / 本地 `Ollama`
 
-### 3.1 核心目标
+## 安装
 
-* 提供一个统一的入口，用户输入命令名即可获取该命令的清晰解释、常用参数说明和典型示例。
-* 确保**绝对安全**，绝不执行用户输入的目标命令，避免任何潜在危险操作。
-* 结合本地帮助文档（保证版本准确性）和 AI 大模型（提升可读性），输出高质量解答。
+```bash
+# 即用即走
+npx cmdhelp git
 
-### 3.2 功能需求（MVP）
+# 或全局安装
+npm i -g cmdhelp
+cmdhelp git
+```
 
-* 支持 Linux、Windows（macOS 可复用 Linux 逻辑）平台。
-* 用户输入格式：`cmdhelp <命令名>`（只提取命令名，忽略后续所有参数）。
-* 调用本地帮助：
+要求 `Node.js >= 18`，零运行时依赖。
 
-  * Linux/macOS：使用 `man <命令名>`。
-  * Windows：使用 PowerShell 的 `Get-Help <命令名>`（或 `Get-Command`）。
-* 将获取到的帮助文本作为上下文，发送给配置好的 AI 大模型（支持 OpenAI 兼容 API 和本地模型如 Ollama）。
-* AI 返回通俗解释，包含命令功能、常用参数及示例。
-* 若本地帮助获取失败，则回退为仅由 AI 基于自身知识回答，并明确提示可能存在版本差异。
+## 快速开始
 
-### 3.3 非 MVP 但建议后续考虑的功能
+```bash
+# 1. 免费模式（无需配置，开箱即用）
+cmdhelp free on
+cmdhelp git
+cmdhelp dir
+cmdhelp 如何列目录          # 自然语言也行
+cmdhelp how to list files
 
-* 交互式追问：用户可以继续提问（如“如何递归复制？”）。
-* 缓存常用命令解释，减少 API 调用。
-* Shell 集成（如快捷键查询当前输入命令）。
-* 支持本地模型完全离线使用。
-* 命令推荐、错误诊断等智能辅助。
+# 2. 想用自己的模型
+cmdhelp setup          # 交互式选择预设（智谱 GLM-Flash 等）或填 OpenAI 兼容地址
+cmdhelp free off
+cmdhelp rm
 
-## 4\. 设计原则与安全策略
+# 3. 切换解释语言
+cmdhelp lang en        # 英文
+cmdhelp lang ja        # 日文
+cmdhelp lang cn        # 切回中文（默认）
+```
 
-### 4.1 安全第一
+## 用法
 
-* **绝不执行用户输入的目标命令**。工具只运行帮助查询命令（`man`、`Get-Help`），这些命令本身是安全的文档查看器，不会触发目标命令的任何副作用。
-* **提取命令名，忽略所有参数**：即使用户输入 `cmdhelp rm -rf /`，也只提取 `rm` 并查询 `man rm`，`-rf /` 被丢弃。
-* **不自动执行 `<命令> /?` 或 `<命令> --help`**：因为这些可能被设计不良的程序忽略参数而直接执行，存在风险。
-* **设置超时和输出大小限制**：防止帮助命令卡死或输出过大。
+```
+cmdhelp <命令名>              # 只取首 token，忽略后续参数，例：cmdhelp rm -rf / → 查 rm
+cmdhelp <自然语言提问>        # 含中文/疑问句自动走 AI，例：cmdhelp 如何列目录 / how to list files?
+cmdhelp free on|off           # 开/关免费模式（big-pickle）
+cmdhelp free                  # 查看当前模式
+cmdhelp lang <代码>           # 设置解释语言（cn/en/ja/fr/ru… 任意 2-8 字母）
+cmdhelp lang                  # 查看当前语言
+cmdhelp setup                 # 交互式配置 AI
+cmdhelp --help | -h
+cmdhelp --version | -v
+```
 
-### 4.2 准确性优先
+**输出**：
+- 命令查询：本地帮助原文（截断）→ 自适应分隔线 → AI 通俗解释（功能 / 常用参数 / 示例），缺失时提示“基于通用知识”
+- 自然语言：直接走 AI，同样三段式，含可直接复制的命令示例
 
-* 优先使用本地帮助文档，确保信息与用户系统上的命令版本一致。
-* AI 负责将技术性帮助文本转化为易于理解的自然语言，并补充示例。
-* 若本地帮助不可用，AI 可基于自身知识回答，但需标注可能不准确。
+## 配置
 
-### 4.3 跨平台一致性
+优先级：`CMDHELP_*` 环境变量 > `~/.cmdhelp/config.json` > 默认。
 
-* 抽象出“获取帮助文本”的接口，不同平台实现不同，但上层逻辑统一。
-* 用户无需关心底层差异，交互方式相同。
+```jsonc
+// ~/.cmdhelp/config.json
+{
+  "base_url": "https://api.openai.com/v1",
+  "api_key": "sk-...",
+  "model": "gpt-4o-mini",
+  "mode": "custom",        // free | custom
+  "free_channel": "anon",  // 免费双通道记忆
+  "lang": "cn"
+}
+```
 
-## 5\. 实现方案
+环境变量：`CMDHELP_BASE_URL` / `CMDHELP_API_KEY` / `CMDHELP_MODEL` / `CMDHELP_LANG` / `CMDHELP_CACHE_DIR`
+非 TTY（如 CI）下只能走环境变量，不会弹交互。
 
-### 5.1 整体流程
+预设在 `src/config.ts:PRESETS`，含智谱 GLM-Flash 等；`Ollama` 即 `base_url=http://127.0.0.1:11434/v1`。
 
-1. 解析用户输入，提取第一个 token 作为命令名。
-2. 检测当前操作系统。
-3. 根据平台调用相应的帮助查询方法：
+## 缓存与性能
 
-   * Linux/macOS：`subprocess.run(\["man", command], capture\_output=True, timeout=5, env={"MANPAGER": "cat"})`
-   * Windows：`subprocess.run(\["powershell", "-NoProfile", "-Command", f"Get-Help {command} -Full | Out-String -Width 200"], capture\_output=True, timeout=5)`
-4. 如果成功获取帮助文本，截取合理长度（如前 200 行或 5000 字符），避免 token 超限。
-5. 调用 AI API，将命令名和帮助文本作为提示词，要求 AI 生成：
+- 路径：`~/.cmdhelp/cache/<命令>__<语言>__<模式>.json`，`CMDHELP_CACHE_DIR` 可覆盖
+- 策略：`stale-while-revalidate`，命中秒出，后台重跑 `help/man/Get-Help` 对比 `sha1(帮助前12位)`，有变化才重调 AI 并标记 `changed` 下次直接出新结果
+- 清理：`Remove-Item "$HOME\.cmdhelp\cache\*.json"` 或删单个 `git__cn__free.json`
 
-   * 命令功能简述
-   * 常用参数列表及说明
-   * 1-2 个典型示例
-6. 输出 AI 生成的结果到终端。
-7. 若帮助获取失败，提示用户，并尝试仅用 AI 生成解释（附注可能因版本不同而不准确）。
+## 常见问题
 
-### 5.2 提示词设计（示例）
+**Windows 下 `man git` 能用吗？**  
+装了 `Git for Windows` 的 `Git Bash` 自带 `man`，`cmdhelp` 会自动走 `man git`；没装则回退 `Get-Help` / AI。
 
-你是命令行助手。以下是命令 {command} 在用户系统上的帮助文档（来自 man/Get-Help）：
+**乱码？**  
+已对 `help.exe` 的 GBK 输出做 `TextDecoder('gbk')` 转码；旧缓存若仍乱码含 `�` 会自动丢弃重生。
 
-{help\_text}
+**免费模型限流 429？**  
+免费池有配额，双通道 `public→anon` 自动重试仍 429 时稍后再试，或 `cmdhelp setup` 配自己的模型。
 
-请用通俗易懂的中文解释这个命令的功能，列出最常用的参数及其作用，并给出1-2个典型示例。如果帮助文档不够详细，可以结合你的知识补充，但要注明哪些是本地文档内容，哪些是通用知识。
+**颜色不生效？**  
+非 TTY 默认无色；`FORCE_COLOR=1 cmdhelp git` 强制彩色，`NO_COLOR=1` 强制无色。
 
+## 本地开发
 
+```bash
+npm run build      # tsc → dist/
+npm test           # vitest
+npm run typecheck  # tsc --noEmit
+```
 
-### 5.3 配置管理
-- 工具首次运行时引导用户配置 AI 接口：
-  - API 类型（OpenAI 兼容 / Ollama 本地）
-  - API 地址、密钥、模型名称等
-- 配置文件保存于用户主目录（如 `~/.cmdhelp/config.json`）。
-- 支持环境变量覆盖配置，方便 CI 使用。
+发布：`npm publish` 前 `prepublishOnly` 自动 `build + test`。包名 `cmdhelp` 已保留。
 
-## 6. MVP 范围
+## 版本
 
-- 支持 Linux 和 Windows（macOS 可通过 Linux 逻辑兼容）。
-- 核心功能：查询命令帮助并解释。
-- 安全机制：只提取命令名，只运行 `man`/`Get-Help`，超时控制。
-- AI 集成：支持 OpenAI API 和 Ollama 本地模型。
-- 输出格式：终端友好，清晰分段。
-- 错误处理：命令不存在、帮助获取失败、AI 调用异常等情况给出友好提示。
+当前 `0.1.1`（`0.1.0` 首发 → `0.1.1` 新增自然语言直答 + GBK 乱码修复）。后续保持 `0.1.x` 小步迭代：`0.1.2` → `0.1.3` … 末位 +1，不升 `0.2`，便于早期快速修复与验证。
 
-## 7. 后续可扩展方向
+### Changelog
 
-1. **交互式问答**：在解释后允许用户追问细节，AI 结合上下文回答。
-2. **缓存机制**：将常用命令的解释缓存到本地，减少 API 调用成本和延迟。
-3. **Shell 集成**：提供 bash/zsh/fish/powershell 插件，支持快捷键查询当前输入的命令。
-4. **命令推荐**：当用户输入模糊需求时，推荐合适的命令及用法。
-5. **安全警告**：检测到危险命令（如 `rm -rf`）时主动提醒并解释风险。
-6. **社区贡献**：允许用户提交修正或补充命令文档，形成知识库。
-7. **多语言支持**：AI 可根据用户语言偏好输出解释。
+- **0.1.1** — 新增 `cmdhelp 如何列目录` 自然语言识别（中文/英文疑问句直接走 AI，跳过本地帮助）；修复 Windows `help` GBK 乱码与 `help git` 误缓存；`--help` 同步更新
+- **0.1.0** — 首发：`help/man/Get-Help` 三级本地优先、免费双通道、缓存秒出、彩色与进度
 
-## 8. 注意事项与风险
+## 安全
 
-- **AI 幻觉**：大模型可能产生不准确或虚构的信息，因此优先提供本地帮助文档作为上下文，并要求 AI 注明信息来源。
-- **帮助文本长度**：某些 `man` 页面极长，需要截断或分段处理，避免超出 token 限制。
-- **Windows 传统 exe 帮助不全**：`Get-Help` 对非 PowerShell 命令支持有限，此时应回退到 AI 知识并提醒用户。
-- **隐私问题**：将命令名及帮助文本发送到云端 AI 可能存在隐私顾虑，建议支持本地模型（如 Ollama）以完全离线运行。
-- **跨平台差异**：不同系统的帮助命令行为可能不同，需充分测试。
+- 绝不执行用户输入的目标命令
+- 只运行 `help` / `man` / `Get-Help`，`windowsHide:true` 无弹窗
+- 白名单校验命令名（字母/数字/._-，不以 `-` 开头）
 
-## 9. 相关工具与参考
+## License
 
-- **tldr**：简化版命令帮助，可作为补充数据源（后续可选）。
-- **cheat.sh**：在线命令速查服务，可作为回退方案。
-- **explainshell.com**：解析 shell 命令并提供解释。
-- **Ollama**：本地大模型运行工具，适合隐私敏感场景。
-
----
-
-**文档版本**：v1.0（MVP 设计）  
-**编制日期**：2026-08-28  
-**编制目的**：指导 AI 开发实现 CmdHelp 命令行智能助手。
-
-
-
-
+MIT

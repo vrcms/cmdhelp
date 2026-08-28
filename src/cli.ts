@@ -22,7 +22,12 @@ import { startSpinner } from './feedback.js';
 import { completeFree } from './free_client.js';
 import { dimLine, formatExplanation } from './format.js';
 import { fetchHelp } from './help_source.js';
-import { buildSystemPrompt, buildUserPrompt } from './prompts.js';
+import {
+  buildQuestionPrompt,
+  buildQuestionSystemPrompt,
+  buildSystemPrompt,
+  buildUserPrompt,
+} from './prompts.js';
 import { extractCommand } from './tokenize.js';
 
 const require = createRequire(import.meta.url);
@@ -83,6 +88,12 @@ export async function run(argv: string[]): Promise<number> {
   }
 
   const raw = argv.join(' ');
+  if (isNaturalLanguageQuery(raw)) {
+    const ai = resolveAi();
+    if (!ai) return handleNoConfig();
+    return answerQuestion(raw, ai.config, { freeTier: ai.freeTier });
+  }
+
   const command = extractCommand(raw);
   if (!command) {
     process.stderr.write(`错误："${raw}" 不是有效的命令名（仅限字母/数字/._-，且不能以 - 开头）。\n`);
@@ -91,10 +102,14 @@ export async function run(argv: string[]): Promise<number> {
 
   const cached = readCache(cacheKey(command, getLang(), getMode()));
   if (cached) {
-    if (cached.changed) {
+    if (isGarbledHelp(cached.help)) {
+      // 旧缓存因 GBK 解码错误导致乱码，视为无效，直接走重新生成
+      process.stderr.write('（检测到历史缓存乱码，已自动清理并重新生成…）\n');
+    } else if (cached.changed) {
       printResult(cached.help, cached.explanation);
       process.stderr.write('（检测到命令帮助有更新，已重新生成结果）\n');
       writeCache({ ...cached, changed: false });
+      return EXIT_OK;
     } else {
       printResult(cached.help, cached.explanation);
       if (cached.lastCheckedAt) {
@@ -105,8 +120,8 @@ export async function run(argv: string[]): Promise<number> {
         process.stderr.write(`（${at} 生成 · 后台校验中…）\n`);
       }
       spawnRefresh(command);
+      return EXIT_OK;
     }
-    return EXIT_OK;
   }
 
   const ai = resolveAi();
@@ -146,6 +161,53 @@ function handleFree(args: string[]): number {
   process.stderr.write('用法：cmdhelp free on | off （开启/关闭免费模式）\n');
   return EXIT_BAD_INPUT;
 }
+function isNaturalLanguageQuery(raw: string): boolean {
+  const t = raw.trim();
+  if (!t) return false;
+  // 任何含中文的输入都视为自然语言（命令名仅限 ASCII）
+  if (/[\u4e00-\u9fa5]/.test(t)) return true;
+  // 英文疑问句
+  const lower = t.toLowerCase();
+  if (/^(how|what|why|when|where|which|can you|please|help me)\b/.test(lower)) return true;
+  if (t.includes('?') || t.includes('？')) return true;
+  // 较长的英文句子且不像 "cmd -flag" 形式
+  if (t.includes(' ') && t.length > 15 && /[a-z]{3,}\s+[a-z]{3,}/i.test(t)) {
+    if (!/^\s*[a-z0-9._-]+\s+[-/]/i.test(t)) return true;
+  }
+  return false;
+}
+
+async function answerQuestion(
+  question: string,
+  config: Config,
+  aiOpts: CompleteOptions & { freeTier?: boolean } = {},
+): Promise<number> {
+  const lang = getLang();
+  const messages = [
+    { role: 'system' as const, content: buildQuestionSystemPrompt(lang) },
+    { role: 'user' as const, content: buildQuestionPrompt(question) },
+  ];
+  const stopAi = startSpinner('正在生成 AI 回答…');
+  try {
+    const explanation = aiOpts.freeTier
+      ? await completeFree(config, messages)
+      : await complete(config, messages, aiOpts);
+    console.log(formatExplanation(explanation));
+    return EXIT_OK;
+  } catch (err) {
+    if (aiOpts.freeTier && (err as AiError).status === 429) {
+      process.stderr.write(
+        '错误：免费模型当前限流（429），请稍后再试，或运行 cmdhelp setup 配置其他 AI 服务。\n',
+      );
+      return EXIT_FAIL;
+    }
+    process.stderr.write(`错误：AI 调用失败：${(err as Error).message}\n`);
+    return EXIT_FAIL;
+  } finally {
+    stopAi();
+  }
+}
+
 async function explain(
   command: string,
   config: Config,
@@ -259,6 +321,13 @@ function spawnRefresh(command: string): void {
   }
 }
 
+function isGarbledHelp(text: string | null): boolean {
+  if (!text) return false;
+  // 旧版本将 GBK 按 UTF-8 解码会产生大量 U+FFFD 替换字符
+  if (text.includes('�')) return true;
+  return false;
+}
+
 function separator(): string {
   const width = process.stdout.columns && process.stdout.columns > 20 ? process.stdout.columns : 60;
   return '─'.repeat(width);
@@ -266,16 +335,20 @@ function separator(): string {
 
 async function printUsage(): Promise<void> {
   console.log(`cmdhelp v${VERSION} — 命令行智能助手
-用法：cmdhelp <命令名>
-      cmdhelp free on|off   开启/关闭免费模式（big-pickle，无需配置）
-      cmdhelp setup         配置自己的 AI 模型
-      cmdhelp lang <代码>   设置解释语言（默认 cn，支持 en/ja/fr/ru 等）
-      cmdhelp lang          查看当前语言
+用法：cmdhelp <命令名>              查询单个命令（例：cmdhelp rm）
+      cmdhelp <自然语言提问>        直接问 AI（例：cmdhelp 如何列目录）
+      cmdhelp free on|off           开启/关闭免费模式（big-pickle，无需配置）
+      cmdhelp setup                 配置自己的 AI 模型
+      cmdhelp lang <代码>           设置解释语言（默认 cn，支持 en/ja/fr/ru 等）
+      cmdhelp lang                  查看当前语言
 示例：cmdhelp rm
+      cmdhelp 如何列目录
+      cmdhelp how to list files
 
-说明：只查询 man/Get-Help 本地帮助文档，绝不执行目标命令；免费模式受限流影响，查不到时可 setup 配置其他服务。
- 查询结果会缓存，再次运行时秒出旧结果并后台校验帮助是否有变化。
- 请支持opencode，仅需10$。`);
+说明：命令查询只读本地 man/help/Get-Help，绝不执行目标命令；自然语言提问直接走 AI。
+  免费模式受限流影响，查不到时可 setup 配置其他服务。
+  查询结果会缓存，再次运行时秒出旧结果并后台校验帮助是否有变化。
+  请支持opencode，仅需10$。`);
 }
 
 async function handleNoConfig(): Promise<number> {
