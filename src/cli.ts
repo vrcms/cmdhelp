@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { complete, type AiError, type CompleteOptions } from './ai_client.js';
@@ -18,6 +17,7 @@ import {
   setMode,
   type Config,
 } from './config.js';
+import { startSpinner } from './feedback.js';
 import { completeFree } from './free_client.js';
 import { dimLine, formatExplanation } from './format.js';
 import { fetchHelp } from './help_source.js';
@@ -98,7 +98,7 @@ export async function run(argv: string[]): Promise<number> {
       printResult(cached.help, cached.explanation);
       const at = new Date(cached.updatedAt).toLocaleTimeString();
       process.stderr.write(`（缓存于 ${at} 生成，正在后台校验帮助变化…）\n`);
-      spawnRefresh(command);
+      await refreshCache(command);
     }
     return EXIT_OK;
   }
@@ -140,19 +140,22 @@ function handleFree(args: string[]): number {
   process.stderr.write('用法：cmdhelp free on | off （开启/关闭免费模式）\n');
   return EXIT_BAD_INPUT;
 }
-
 async function explain(
   command: string,
   config: Config,
   aiOpts: CompleteOptions & { freeTier?: boolean } = {},
 ): Promise<number> {
   const lang = getLang();
+  const stop = startSpinner(`正在查询本地帮助（${command}）…`);
   const help = await fetchHelp(command);
+  stop();
+
   const messages = [
     { role: 'system' as const, content: buildSystemPrompt(lang) },
     { role: 'user' as const, content: buildUserPrompt(command, help) },
   ];
 
+  const stopAi = startSpinner('正在生成 AI 通俗解释…');
   try {
     const explanation = aiOpts.freeTier
       ? await completeFree(config, messages)
@@ -185,6 +188,54 @@ async function explain(
     }
     process.stderr.write(`错误：AI 调用失败：${(err as Error).message}\n`);
     return EXIT_FAIL;
+  } finally {
+    stopAi();
+  }
+}
+
+async function refreshCache(command: string): Promise<void> {
+  const key = cacheKey(command, getLang(), getMode());
+  const cached = readCache(key);
+  if (!cached) return;
+  const stopCheck = startSpinner('正在校验命令帮助是否有变化…');
+  const help = await fetchHelp(command);
+  const hash = hashHelp(help);
+  if (hash === cached.helpHash) {
+    stopCheck();
+    writeCache({ ...cached, lastCheckedAt: Date.now() });
+    process.stderr.write('（校验完成：命令帮助无变化）\n');
+    return;
+  }
+  stopCheck();
+  process.stderr.write('（命令帮助有变化，正在重新生成解释…）\n');
+  const stopAi = startSpinner('正在生成新解释…');
+  try {
+    const ai = resolveAi();
+    if (!ai) {
+      throw new Error('未配置 AI 接口');
+    }
+    const messages = [
+      { role: 'system' as const, content: buildSystemPrompt(cached.lang) },
+      { role: 'user' as const, content: buildUserPrompt(command, help) },
+    ];
+    const explanation = ai.freeTier
+      ? await completeFree(ai.config, messages)
+      : await complete(ai.config, messages);
+    writeCache({
+      ...cached,
+      help,
+      explanation,
+      helpHash: hash,
+      updatedAt: Date.now(),
+      lastCheckedAt: Date.now(),
+      changed: true,
+    });
+    process.stderr.write('（已重新生成，下次运行将显示新版结果）\n');
+  } catch {
+    writeCache({ ...cached, lastCheckedAt: Date.now() });
+    process.stderr.write('（更新失败：AI 不可用，下次仍将使用旧结果）\n');
+  } finally {
+    stopAi();
   }
 }
 
@@ -232,16 +283,6 @@ function printResult(help: string | null, explanation: string | null): void {
   if (explanation) {
     console.log(formatExplanation(explanation));
   }
-}
-
-function spawnRefresh(command: string): void {
-  const cliPath = fileURLToPath(import.meta.url);
-  const child = spawn(process.execPath, [cliPath, 'refresh', command], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  });
-  child.unref();
 }
 
 function separator(): string {
