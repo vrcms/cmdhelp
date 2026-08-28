@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
@@ -30,8 +29,7 @@ import {
 } from './prompts.js';
 import { extractCommand } from './tokenize.js';
 
-const require = createRequire(import.meta.url);
-const VERSION = require('../package.json').version as string;
+const VERSION = '0.1.2';
 
 const EXIT_OK = 0;
 const EXIT_FAIL = 1;
