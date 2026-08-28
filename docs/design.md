@@ -62,6 +62,11 @@
 - 模式与通道持久化在 `~/.cmdhelp/config.json`（`mode` 与 `free_channel` 字段），自定义接口配置字段不受开关影响。
 - **输出排版**：先原样输出本地帮助原文（截断后），再输出终端宽度自适应分隔线（`─`，置灰），最后是 AI 通俗解释；帮助不可用时仅有提示行 + AI 解释。
 - **彩色输出**（`src/color.ts` + `src/format.ts`）：AI 解释的 `### 功能`（绿）、`### 常用参数`（黄）、`### 示例`（蓝）分节标题着色，行内 `\`参数名\`` 青色，回退提示行置灰；遵循 `NO_COLOR`（强制关）与 `FORCE_COLOR`（强制开）规范，非 TTY/管道自动无色降级。
+- **查询缓存（stale-while-revalidate）**（`src/cache.ts`）：`~/.cmdhelp/cache/<命令>__<语言>__<模式>.json`（`CMDHELP_CACHE_DIR` 可覆盖目录）；缓存的帮助原文取 sha1 前 12 位作 `helpHash` 做变化检测。
+  - 命中且无变化：**秒出缓存内容**（stderr 提示生成时间），同时 `spawn` 分离子进程执行隐藏命令 `cmdhelp refresh <命令>`（`detached: true` + `unref()`，主进程立即退出，Windows 下无窗口）做后台校验。
+  - 后台校验：重新 `man`/`Get-Help` 并比 hash——无变化仅更新 `lastCheckedAt`；有变化则重新生成 AI 解释并置 `changed: true`；AI 失败保留旧缓存仅更新检查时间。
+  - **下次运行读到 `changed: true` 时不再吐旧结果**：直接输出新缓存并提示「检测到命令帮助有更新，已重新生成结果」，同时清除标记。
+  - 缓存键含语言与模式，`cmdhelp lang` / `free on|off` 切换后自动隔离，互不串扰。
 - **多语言**：`cmdhelp lang <代码>` 切换解释语言（默认 `cn`，任意代码均可，内置 cn/en/ja/fr/ru/de/ko/es/pt/it 名称映射，未知代码原样传给模型）；`cmdhelp lang` 查看当前；持久化在 config 的 `lang` 字段，环境变量 `CMDHELP_LANG` 覆盖（优先级 env > 文件 > cn）。语言注入 system 提示词首行。
 - 输出：AI 三段 markdown（`###` 标题）原样打印到 stdout；诊断信息走 stderr。
 - MVP 不做：`--raw`、交互追问、缓存、shell 集成、危险命令预警（全部后移 v2，见 readme §7）。

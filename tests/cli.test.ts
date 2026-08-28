@@ -23,11 +23,26 @@ vi.mock('../src/config.js', () => ({
 vi.mock('../src/help_source.js', () => ({ fetchHelp: vi.fn() }));
 vi.mock('../src/ai_client.js', () => ({ complete: vi.fn() }));
 vi.mock('../src/free_client.js', () => ({ completeFree: vi.fn() }));
+vi.mock('../src/cache.js', async () => {
+  const actual = await import('../src/cache.js');
+  return {
+    ...actual,
+    readCache: vi.fn(),
+    writeCache: vi.fn(),
+  };
+});
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, spawn: vi.fn(() => ({ unref: vi.fn() })) };
+});
 
 import { getLang, getMode, loadConfig, setLang, setMode } from '../src/config.js';
 import { fetchHelp } from '../src/help_source.js';
 import { complete } from '../src/ai_client.js';
 import { completeFree } from '../src/free_client.js';
+import { readCache, writeCache, hashHelp } from '../src/cache.js';
+import { spawn } from 'node:child_process';
 import { run } from '../src/cli.js';
 
 const loadConfigMock = vi.mocked(loadConfig);
@@ -38,8 +53,22 @@ const getLangMock = vi.mocked(getLang);
 const setLangMock = vi.mocked(setLang);
 const getModeMock = vi.mocked(getMode);
 const setModeMock = vi.mocked(setMode);
+const readCacheMock = vi.mocked(readCache);
+const writeCacheMock = vi.mocked(writeCache);
+const spawnMock = vi.mocked(spawn);
 
-const CONFIG = { base_url: 'http://127.0.0.1:11434/v1', api_key: '', model: 'llama3.1' };
+const CONFIG = { base_url: 'http://127.0.0.1:11434/v1', api_key: '', model: 'llama3.1' };const CACHED = {
+  command: 'rm',
+  lang: 'cn',
+  mode: 'custom',
+  help: 'RM(1) manual',
+  explanation: '### 功能\n删除文件（缓存版）',
+  helpHash: 'oldhash',
+  createdAt: 1000,
+  updatedAt: 1000,
+  lastCheckedAt: null,
+  changed: false,
+};
 
 function capture(prefix: string): unknown[] {
   const lines: string[] = [];
@@ -65,6 +94,9 @@ describe('run', () => {
     setLangMock.mockReset();
     getModeMock.mockReturnValue('custom');
     setModeMock.mockReset();
+    readCacheMock.mockReset();
+    writeCacheMock.mockReset();
+    spawnMock.mockReset();
   });
 
   it('坏输入：拒绝并解释白名单规则', async () => {
@@ -78,6 +110,7 @@ describe('run', () => {
 
   it('成功流：帮助原文 + 分隔线 + AI 解释', async () => {
     loadConfigMock.mockReturnValue(CONFIG);
+    readCacheMock.mockReturnValue(null);
     fetchHelpMock.mockResolvedValue('RM(1) manual');
     completeMock.mockResolvedValue('### 功能\n删除文件');
     const [lines, spy, errSpy] = capture('ERR:');
@@ -89,6 +122,123 @@ describe('run', () => {
     expect(out).toContain('### 功能\n删除文件');
     expect(out.indexOf('RM(1) manual')).toBeLessThan(out.indexOf('### 功能'));
     expect(fetchHelpMock).toHaveBeenCalledWith('rm');
+    expect(writeCacheMock).toHaveBeenCalledWith(
+      expect.objectContaining({ command: 'rm', lang: 'cn', mode: 'custom', helpHash: expect.any(String), changed: false }),
+    );
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('缓存命中（无变化）→ 秒出缓存并后台 spawn refresh', async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    readCacheMock.mockReturnValue({ ...CACHED });
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['rm']);
+    expect(code).toBe(0);
+    const out = lines.join('\n');
+    expect(out).toContain('RM(1) manual');
+    expect(out).toContain('删除文件（缓存版）');
+    expect(out).toContain('缓存');
+    expect(fetchHelpMock).not.toHaveBeenCalled();
+    expect(completeMock).not.toHaveBeenCalled();
+    expect(writeCacheMock).not.toHaveBeenCalled();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const [exec, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
+    expect(exec).toBe(process.execPath);
+    expect(args.join(' ')).toContain('refresh rm');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('缓存命中但后台已检测到变化 → 输出新结果并清除 changed 标记（不再 spawn）', async () => {
+    readCacheMock.mockReturnValue({ ...CACHED, changed: true, explanation: '### 功能\n新解释' });
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['rm']);
+    expect(code).toBe(0);
+    const out = lines.join('\n');
+    expect(out).toContain('新解释');
+    expect(out).toContain('有更新');
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(writeCacheMock).toHaveBeenCalledWith(expect.objectContaining({ changed: false }));
+    expect(fetchHelpMock).not.toHaveBeenCalled();
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('缓存缺失时查到的帮助写入缓存（hash 基于帮助原文）', async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    readCacheMock.mockReturnValue(null);
+    fetchHelpMock.mockResolvedValue('RM(1) manual');
+    completeMock.mockResolvedValue('### 功能\n删除文件');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['rm']);
+    expect(code).toBe(0);
+    const entry = writeCacheMock.mock.calls[0]![0];
+    expect(entry.helpHash).toBe(hashHelp('RM(1) manual'));
+    expect(entry.explanation).toBe('### 功能\n删除文件');
+    expect(entry.createdAt).toBeGreaterThan(0);
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('refresh：帮助无变化 → 仅更新 lastCheckedAt 且不重写解释', async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    readCacheMock.mockReturnValue({ ...CACHED, helpHash: hashHelp('RM(1) manual') });
+    fetchHelpMock.mockResolvedValue('RM(1) manual');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['refresh', 'rm']);
+    expect(code).toBe(0);
+    expect(writeCacheMock).toHaveBeenCalledTimes(1);
+    const entry = writeCacheMock.mock.calls[0]![0];
+    expect(entry.changed).toBe(false);
+    expect(entry.lastCheckedAt).toBeGreaterThan(0);
+    expect(completeMock).not.toHaveBeenCalled();
+    expect(fetchHelpMock).toHaveBeenCalledWith('rm');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('refresh：帮助有变化 → 重新生成解释并标记 changed', async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    readCacheMock.mockReturnValue({ ...CACHED, helpHash: 'oldhash' });
+    fetchHelpMock.mockResolvedValue('RM(1) manual v2');
+    completeMock.mockResolvedValue('### 功能\n新版本解释');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['refresh', 'rm', 'x']);
+    expect(code).toBe(0);
+    const entry = writeCacheMock.mock.calls[0]![0];
+    expect(entry.changed).toBe(true);
+    expect(entry.help).toBe('RM(1) manual v2');
+    expect(entry.explanation).toBe('### 功能\n新版本解释');
+    expect(entry.helpHash).not.toBe('oldhash');
+    expect(completeMock).toHaveBeenCalled();
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('refresh：无缓存时静默退出', async () => {
+    readCacheMock.mockReturnValue(null);
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['refresh', 'rm']);
+    expect(code).toBe(0);
+    expect(fetchHelpMock).not.toHaveBeenCalled();
+    expect(writeCacheMock).not.toHaveBeenCalled();
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('刷新期间 AI 失败 → 保留旧缓存仅记录检查时间', async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    readCacheMock.mockReturnValue({ ...CACHED, helpHash: 'oldhash' });
+    fetchHelpMock.mockResolvedValue('RM(1) manual v2');
+    completeMock.mockRejectedValue(new Error('boom'));
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['refresh', 'rm']);
+    expect(code).toBe(0);
+    const entry = writeCacheMock.mock.calls[0]![0];
+    expect(entry.changed).toBe(false);
+    expect(entry.explanation).toBe('### 功能\n删除文件（缓存版）');
+    expect(entry.help).toBe('RM(1) manual');
     spy.mockRestore();
     errSpy.mockRestore();
   });
@@ -96,6 +246,7 @@ describe('run', () => {
   it('语言设置传入 AI（en 时提示词使用英文）', async () => {
     getLangMock.mockReturnValue('en');
     loadConfigMock.mockReturnValue(CONFIG);
+    readCacheMock.mockReturnValue(null);
     fetchHelpMock.mockResolvedValue('RM(1) manual');
     completeMock.mockResolvedValue('### Description\nDelete files');
     const [lines, spy, errSpy] = capture('ERR:');

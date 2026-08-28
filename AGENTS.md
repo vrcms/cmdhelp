@@ -25,6 +25,7 @@
 - AI 输出结构：功能简述 + 常用参数说明 + 1-2 个典型示例（中文/按 `lang` 配置的语言）。
 - 输出排版：本地帮助原文（截断）→ 宽度自适应分隔线 → AI 解释（见 `cli.ts` 的 `separator()`）；`cmdhelp lang <代码>` 切换语言（默认 cn，任意代码，`CMDHELP_LANG` 环境变量覆盖，语言名映射在 `src/prompts.ts` 的 `LANGUAGE_NAMES`）。
 - 颜色：`src/color.ts`（NO_COLOR/FORCE_COLOR 规范，非 TTY 无色）+ `src/format.ts`（功能绿/参数黄/示例蓝/内联代码青/提示灰），`FORCE_COLOR=1` 可用于真机验证。
+- 查询缓存：`src/cache.ts` 存 `~/.cmdhelp/cache/<命令>__<语言>__<模式>.json`（`CMDHELP_CACHE_DIR` 可覆盖）；命中秒出旧结果，spawn 分离子进程跑隐藏命令 `cmhelp refresh <命令>` 做后台校验（重新 man/Get-Help 比对帮助 sha1）；变化则重生成解释并标记 `changed`，下次运行直接输出新结果；缓存键含语言/模式自动隔离。
 
 ## 开发与发布命令
 

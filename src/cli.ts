@@ -1,9 +1,11 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { complete, type AiError, type CompleteOptions } from './ai_client.js';
+import { cacheKey, hashHelp, readCache, writeCache } from './cache.js';
 import {
   FREE_PRESET,
   PRESETS,
@@ -65,6 +67,19 @@ export async function run(argv: string[]): Promise<number> {
     process.stdout.write(`解释语言已切换为 ${code}。\n`);
     return EXIT_OK;
   }
+  if (first === 'refresh') {
+    if (argv.length < 2) {
+      process.stderr.write('内部用法：cmdhelp refresh <命令名>（后台校验缓存更新，无需手动调用）。\n');
+      return EXIT_BAD_INPUT;
+    }
+    const command = extractCommand(argv.slice(1).join(' '));
+    if (!command) {
+      process.stderr.write('错误：无效的命令名。\n');
+      return EXIT_BAD_INPUT;
+    }
+    await refresh(command);
+    return EXIT_OK;
+  }
 
   const raw = argv.join(' ');
   const command = extractCommand(raw);
@@ -73,20 +88,37 @@ export async function run(argv: string[]): Promise<number> {
     return EXIT_BAD_INPUT;
   }
 
-  if (getMode() === 'free') {
-    const freeConfig: Config = {
-      base_url: FREE_PRESET.base_url,
-      api_key: 'public',
-      model: FREE_PRESET.model,
-    };
-    return explain(command, freeConfig, { freeTier: true });
+  const cached = readCache(cacheKey(command, getLang(), getMode()));
+  if (cached) {
+    if (cached.changed) {
+      printResult(cached.help, cached.explanation);
+      process.stderr.write('（检测到命令帮助有更新，已重新生成结果）\n');
+      writeCache({ ...cached, changed: false });
+    } else {
+      printResult(cached.help, cached.explanation);
+      const at = new Date(cached.updatedAt).toLocaleTimeString();
+      process.stderr.write(`（缓存于 ${at} 生成，正在后台校验帮助变化…）\n`);
+      spawnRefresh(command);
+    }
+    return EXIT_OK;
   }
 
-  const config = loadConfig();
-  if (!config) {
+  const ai = resolveAi();
+  if (!ai) {
     return handleNoConfig();
   }
-  return explain(command, config);
+  return explain(command, ai.config, { freeTier: ai.freeTier });
+}
+
+function resolveAi(): { config: Config; freeTier: boolean } | null {
+  if (getMode() === 'free') {
+    return {
+      config: { base_url: FREE_PRESET.base_url, api_key: 'public', model: FREE_PRESET.model },
+      freeTier: true,
+    };
+  }
+  const config = loadConfig();
+  return config ? { config, freeTier: false } : null;
 }
 
 function handleFree(args: string[]): number {
@@ -114,8 +146,8 @@ async function explain(
   config: Config,
   aiOpts: CompleteOptions & { freeTier?: boolean } = {},
 ): Promise<number> {
-  const help = await fetchHelp(command);
   const lang = getLang();
+  const help = await fetchHelp(command);
   const messages = [
     { role: 'system' as const, content: buildSystemPrompt(lang) },
     { role: 'user' as const, content: buildUserPrompt(command, help) },
@@ -125,13 +157,19 @@ async function explain(
     const explanation = aiOpts.freeTier
       ? await completeFree(config, messages)
       : await complete(config, messages, aiOpts);
-    if (help) {
-      console.log(help);
-      console.log(dimLine(separator()));
-    } else {
-      console.log('注：本地帮助不可用，以下基于通用知识，可能与当前系统版本有差异。\n');
-    }
-    console.log(formatExplanation(explanation));
+    writeCache({
+      command,
+      lang,
+      mode: getMode(),
+      help,
+      explanation,
+      helpHash: hashHelp(help),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastCheckedAt: null,
+      changed: false,
+    });
+    printResult(help, explanation);
     return EXIT_OK;
   } catch (err) {
     if (help) {
@@ -150,6 +188,62 @@ async function explain(
   }
 }
 
+async function refresh(command: string): Promise<void> {
+  const key = cacheKey(command, getLang(), getMode());
+  const cached = readCache(key);
+  if (!cached) return;
+  const help = await fetchHelp(command);
+  const hash = hashHelp(help);
+  if (hash === cached.helpHash) {
+    writeCache({ ...cached, lastCheckedAt: Date.now() });
+    return;
+  }
+  try {
+    const ai = resolveAi();
+    if (!ai) return;
+    const messages = [
+      { role: 'system' as const, content: buildSystemPrompt(cached.lang) },
+      { role: 'user' as const, content: buildUserPrompt(command, help) },
+    ];
+    const explanation = ai.freeTier
+      ? await completeFree(ai.config, messages)
+      : await complete(ai.config, messages);
+    writeCache({
+      ...cached,
+      help,
+      explanation,
+      helpHash: hash,
+      updatedAt: Date.now(),
+      lastCheckedAt: Date.now(),
+      changed: true,
+    });
+  } catch {
+    writeCache({ ...cached, lastCheckedAt: Date.now() });
+  }
+}
+
+function printResult(help: string | null, explanation: string | null): void {
+  if (help) {
+    console.log(help);
+    console.log(dimLine(separator()));
+  } else {
+    console.log('注：本地帮助不可用，以下基于通用知识，可能与当前系统版本有差异。\n');
+  }
+  if (explanation) {
+    console.log(formatExplanation(explanation));
+  }
+}
+
+function spawnRefresh(command: string): void {
+  const cliPath = fileURLToPath(import.meta.url);
+  const child = spawn(process.execPath, [cliPath, 'refresh', command], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+}
+
 function separator(): string {
   const width = process.stdout.columns && process.stdout.columns > 20 ? process.stdout.columns : 60;
   return '─'.repeat(width);
@@ -165,7 +259,8 @@ async function printUsage(): Promise<void> {
 示例：cmdhelp rm
 
 说明：只查询 man/Get-Help 本地帮助文档，绝不执行目标命令；免费模式受限流影响，查不到时可 setup 配置其他服务。
-请支持opencode，仅需10$。`);
+ 查询结果会缓存，再次运行时秒出旧结果并后台校验帮助是否有变化。
+ 请支持opencode，仅需10$。`);
 }
 
 async function handleNoConfig(): Promise<number> {
