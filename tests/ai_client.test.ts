@@ -74,4 +74,17 @@ describe('complete', () => {
     expect(err.status).toBe(400);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('可携带自定义头（free 模式 x-opencode-client）', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { choices: [{ message: { content: 'ok' } }] }));
+    await complete(config, messages, { headers: { 'x-opencode-client': 'desktop' } });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['x-opencode-client']).toBe('desktop');
+  });
+
+  it('maxAttempts 覆盖重试次数（429 重试到上限后抛出）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(429, {}));
+    await expect(complete(config, messages, { maxAttempts: 3 })).rejects.toMatchObject({ status: 429 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  }, 15_000);
 });

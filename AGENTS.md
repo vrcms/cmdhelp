@@ -20,7 +20,8 @@
 - 帮助获取：POSIX 用 `man`（env 加 `MANPAGER=cat`、`MANWIDTH=120`）；Windows 用 `powershell -NoProfile -Command "Get-Help <cmd> -Full | Out-String -Width 200"`。
 - `Get-Help` 对非 PowerShell 的 exe 支持有限，失败时回退为仅 AI 解释并**明确提示可能不准确**。
 - AI 客户端只用 OpenAI 兼容 `POST {base_url}/chat/completions`；Ollama 即 `base_url=http://127.0.0.1:11434/v1`（见 ADR-0001）。
-- 配置：首次运行引导写入 `~/.cmdhelp/config.json`（`base_url`/`api_key`/`model`），环境变量 `CMDHELP_*` 覆盖。
+- `cmdhelp free on|off` 开关免费模式（持久化在 `~/.cmdhelp/config.json` 的 `mode` 字段）：开启后查询自动直连 OpenCode 免费池（`https://opencode.ai/zen/v1`，`Authorization: Bearer public`，固定模型 `big-pickle`，头 `x-opencode-client: desktop`）；`free_client.ts` 实现双通道自动切换——public 失败（401/403/429）即试匿名通道（无 Authorization，`User-Agent: opencode` + hermes `HTTP-Referer`/`X-Title` 头），成功记 `free_channel: anon` 供下次直达，双败回退 public 并给限流提示，不改模型。
+- 配置：首次运行或 `cmdhelp setup` 引导写入 `~/.cmdhelp/config.json`（`base_url`/`api_key`/`model`），内置免费服务预设（智谱 GLM-Flash 等，见 `src/config.ts` 的 `PRESETS`）；环境变量 `CMDHELP_*` 覆盖，非 TTY 时只能走环境变量。
 - AI 输出结构：功能简述 + 常用参数说明 + 1-2 个典型示例（中文）。
 
 ## 开发与发布命令
@@ -31,4 +32,4 @@
 ## 其他
 
 - `.opencode/skills/continual-learning/` 插件会维护 AGENTS.md 的 `## Learned User Preferences` / `## Learned Workspace Facts` 两个区块，不要删除或改写这两个区块。
-- 本目录不是 git 仓库。
+- 本目录是 git 仓库（main 分支）；`.opencode/state/`（本机插件状态）与 `node_modules/`、`dist/` 已在 .gitignore 忽略，不要手动提交它们。

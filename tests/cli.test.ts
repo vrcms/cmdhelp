@@ -4,29 +4,51 @@ vi.mock('../src/config.js', () => ({
   loadConfig: vi.fn(),
   configPath: vi.fn(() => 'C:/fake/.cmdhelp/config.json'),
   saveConfig: vi.fn(),
+  getMode: vi.fn(),
+  setMode: vi.fn(),
+  FREE_PRESET: {
+    name: 'OpenCode AI 免费模型（big-pickle，无需注册）',
+    base_url: 'https://opencode.ai/zen/v1',
+    model: 'big-pickle',
+    need_key: false,
+    key_hint: '',
+  },
+  PRESETS: [
+    { name: 'fake preset', base_url: 'http://fake/v1', model: 'm', need_key: false, key_hint: '' },
+  ],
 }));
+
 vi.mock('../src/help_source.js', () => ({ fetchHelp: vi.fn() }));
 vi.mock('../src/ai_client.js', () => ({ complete: vi.fn() }));
+vi.mock('../src/free_client.js', () => ({ completeFree: vi.fn() }));
 
-import { loadConfig } from '../src/config.js';
+import { getMode, loadConfig, setMode } from '../src/config.js';
 import { fetchHelp } from '../src/help_source.js';
 import { complete } from '../src/ai_client.js';
+import { completeFree } from '../src/free_client.js';
 import { run } from '../src/cli.js';
 
 const loadConfigMock = vi.mocked(loadConfig);
 const fetchHelpMock = vi.mocked(fetchHelp);
 const completeMock = vi.mocked(complete);
+const completeFreeMock = vi.mocked(completeFree);
+const getModeMock = vi.mocked(getMode);
+const setModeMock = vi.mocked(setMode);
 
 const CONFIG = { base_url: 'http://127.0.0.1:11434/v1', api_key: '', model: 'llama3.1' };
 
-function capture(prefix: string): string[] {
+function capture(prefix: string): unknown[] {
   const lines: string[] = [];
   const spy = vi.spyOn(console, 'log').mockImplementation((line: string) => lines.push(String(line)));
+  const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(((line: string) => {
+    lines.push(String(line));
+    return true;
+  }) as never);
   const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(((line: string) => {
     lines.push(`${prefix}${line}`);
     return true;
   }) as never);
-  return [lines, spy, errSpy] as unknown as string[];
+  return [lines, spy, errSpy, stdoutSpy] as unknown as string[];
 }
 
 describe('run', () => {
@@ -34,6 +56,9 @@ describe('run', () => {
     loadConfigMock.mockReset();
     fetchHelpMock.mockReset();
     completeMock.mockReset();
+    completeFreeMock.mockReset();
+    getModeMock.mockReturnValue('custom');
+    setModeMock.mockReset();
   });
 
   it('坏输入：拒绝并解释白名单规则', async () => {
@@ -103,6 +128,100 @@ describe('run', () => {
     const code = await run(['rm']);
     expect(code).toBe(3);
     expect(lines.join('\n')).toContain('CMDHELP_BASE_URL');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('setup 在非 TTY 环境报错并提示环境变量', async () => {
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['setup']);
+    expect(code).toBe(3);
+    expect(lines.join('\n')).toContain('交互终端');
+    expect(lines.join('\n')).toContain('CMDHELP_BASE_URL');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('--version 输出版本号', async () => {
+    const [lines, spy, errSpy] = capture('');
+    const code = await run(['--version']);
+    expect(code).toBe(0);
+    expect(lines.join('\n')).toMatch(/^\d+\.\d+\.\d+$/);
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('--help 输出支持 opencode 的呼吁文案', async () => {
+    const [lines, spy, errSpy] = capture('');
+    const code = await run(['--help']);
+    expect(code).toBe(0);
+    expect(lines.join('\n')).toContain('请支持opencode，仅需10$');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('free on 持久化开启免费模式', async () => {
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['free', 'on']);
+    expect(code).toBe(0);
+    expect(setModeMock).toHaveBeenCalledWith('free');
+    expect(lines.join('\n')).toContain('已开启免费模式');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('free off 关闭免费模式', async () => {
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['free', 'off']);
+    expect(code).toBe(0);
+    expect(setModeMock).toHaveBeenCalledWith('custom');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('free 无参数显示当前状态', async () => {
+    getModeMock.mockReturnValue('free');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['free']);
+    expect(code).toBe(0);
+    expect(lines.join('\n')).toContain('已开启');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('free 后跟非法参数报用法', async () => {
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['free', 'xxx']);
+    expect(code).toBe(2);
+    expect(lines.join('\n')).toContain('free on | off');
+    expect(setModeMock).not.toHaveBeenCalled();
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('免费模式开启时查询自动走 OpenCode 免费池（通道切换）', async () => {
+    getModeMock.mockReturnValue('free');
+    fetchHelpMock.mockResolvedValue('RM(1) manual');
+    completeFreeMock.mockResolvedValue('### 功能\n免费解释');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['rm']);
+    expect(code).toBe(0);
+    expect(lines.join('\n')).toContain('免费解释');
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    const [config] = completeFreeMock.mock.calls[0] as unknown as [object];
+    expect(config).toMatchObject({ base_url: 'https://opencode.ai/zen/v1', api_key: 'public', model: 'big-pickle' });
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('免费模式查询遇 429 给出限流专属提示', async () => {
+    getModeMock.mockReturnValue('free');
+    fetchHelpMock.mockResolvedValue('RM(1) manual');
+    completeFreeMock.mockRejectedValue(Object.assign(new Error('rate limited'), { status: 429 }));
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['rm']);
+    expect(code).toBe(1);
+    expect(lines.join('\n')).toContain('免费模型当前限流');
     spy.mockRestore();
     errSpy.mockRestore();
   });

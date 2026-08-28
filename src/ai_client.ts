@@ -5,6 +5,11 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface CompleteOptions {
+  headers?: Record<string, string>;
+  maxAttempts?: number;
+}
+
 export interface AiError extends Error {
   status?: number;
 }
@@ -15,13 +20,23 @@ const TEMPERATURE = 0.3;
 const MAX_ATTEMPTS = 2;
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 
-export async function complete(config: Config, messages: ChatMessage[]): Promise<string> {
+export async function complete(
+  config: Config,
+  messages: ChatMessage[],
+  opts: CompleteOptions = {},
+): Promise<string> {
   const url = `${config.base_url.replace(/\/+$/, '')}/chat/completions`;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+  const maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(config.api_key ? { Authorization: `Bearer ${config.api_key}` } : {}),
+    ...opts.headers,
+  };
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      return await requestOnce(url, config, messages);
+      return await requestOnce(url, config, messages, headers);
     } catch (err) {
-      if (isRetryable(err) && attempt < MAX_ATTEMPTS - 1) {
+      if (isRetryable(err) && attempt < maxAttempts - 1) {
         await sleep(2_000);
         continue;
       }
@@ -35,15 +50,13 @@ async function requestOnce(
   url: string,
   config: Config,
   messages: ChatMessage[],
+  headers: Record<string, string>,
 ): Promise<string> {
   let response: Response;
   try {
     response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(config.api_key ? { Authorization: `Bearer ${config.api_key}` } : {}),
-      },
+      headers,
       body: JSON.stringify({
         model: config.model,
         messages,

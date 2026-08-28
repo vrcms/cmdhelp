@@ -38,8 +38,9 @@
 ## 5. 配置
 
 - 文件：`~/.cmdhelp/config.json`（`os.homedir()`，Windows 为 `%USERPROFILE%`），字段 `base_url` / `api_key` / `model`；POSIX 权限 0600。
+- **内置服务预设**（`cmdhelp setup` 引导选择，30 秒完成）：智谱 GLM-Flash（免费额度、国内直连，默认推荐）/ Ollama 本地 / DeepSeek（低价按量）/ 自定义 OpenAI 兼容；预设只需填 key，base_url 与 model 自动带出。
 - 环境变量覆盖（优先级：env > 文件）：`CMDHELP_BASE_URL` / `CMDHELP_API_KEY` / `CMDHELP_MODEL`。
-- 首次运行：无配置且 stdin 为 TTY → 交互式向导写文件；无配置且非 TTY（CI）→ stderr 报错并提示用环境变量。
+- 首次运行：无配置且 stdin 为 TTY → 自动进入 setup 向导写文件；无配置且非 TTY（CI）→ stderr 报错并提示 `cmdhelp setup` 或环境变量。
 
 ## 6. 错误处理矩阵
 
@@ -55,6 +56,10 @@
 ## 7. CLI 界面
 
 - `cmdhelp <命令名>`：单位置参数；工具自身 `--help` / `--version` 用 `util.parseArgs` 提供（这俩是工具的，不是目标命令的）。
+- **免费模式开关**：`cmdhelp free on` 开启 / `cmdhelp free off` 关闭 / `cmdhelp free` 查看状态。开启后 `cmdhelp <命令名>` 自动改走 OpenCode AI 免费池（`https://opencode.ai/zen/v1`，`Authorization: Bearer public` + 头 `x-opencode-client: desktop`），模型固定 `big-pickle`（`src/config.ts` 的 `FREE_PRESET`）。
+- **免费双通道自动切换**（`src/free_client.ts`）：免费池有 public（`Bearer public`）与匿名（无 Authorization，`User-Agent: opencode` + `HTTP-Referer: https://hermes-agent.nousresearch.com` + `X-Title: Hermes Agent`）两个通道，配额相互独立。优先通道失败（401/403/429）即切换另一通道；成功则把通道记录持久化到 `~/.cmdhelp/config.json` 的 `free_channel`（下次直接走该通道），双通道均失败则回退 public 并给限流专属提示。网络类错误不切换。
+- `cmdhelp setup`：配置自己的 AI 模型（写入 config 后模式自动转 custom，可 `free on` 切回）。
+- 模式与通道持久化在 `~/.cmdhelp/config.json`（`mode` 与 `free_channel` 字段），自定义接口配置字段不受开关影响。
 - 输出：AI 三段 markdown（`###` 标题）原样打印到 stdout；诊断信息走 stderr。
 - MVP 不做：`--raw`、交互追问、缓存、shell 集成、危险命令预警（全部后移 v2，见 readme §7）。
 
