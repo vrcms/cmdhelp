@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('../src/update.js', () => ({ spawnUpdateCheck: vi.fn() }));
+
 vi.mock('../src/config.js', () => ({
   loadConfig: vi.fn(),
   configPath: vi.fn(() => 'C:/fake/.cmdhelp/config.json'),

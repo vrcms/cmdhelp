@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawnUpdateCheck } from './update.js';
+import { VERSION } from './version.js';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { complete, type AiError, type CompleteOptions } from './ai_client.js';
@@ -28,8 +30,6 @@ import {
   buildUserPrompt,
 } from './prompts.js';
 import { extractCommand } from './tokenize.js';
-
-const VERSION = '0.1.2';
 
 const EXIT_OK = 0;
 const EXIT_FAIL = 1;
@@ -86,6 +86,9 @@ export async function run(argv: string[]): Promise<number> {
   }
 
   const raw = argv.join(' ');
+  // 后台检查更新（24h 一次，npx 场景仅提示，全局安装会后台自动更新）
+  spawnUpdateCheck();
+
   if (isNaturalLanguageQuery(raw)) {
     const ai = resolveAi();
     if (!ai) return handleNoConfig();
