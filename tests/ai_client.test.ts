@@ -31,7 +31,7 @@ describe('complete', () => {
     const body = JSON.parse(String(init.body));
     expect(body.model).toBe('llama3.1');
     expect(body.temperature).toBe(0.3);
-    expect(body.max_tokens).toBe(600);
+    expect(body.max_tokens).toBe(4000);
     expect(init.headers).not.toHaveProperty('Authorization');
   });
 

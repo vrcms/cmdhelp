@@ -65,7 +65,7 @@ const CONFIG = { base_url: 'http://127.0.0.1:11434/v1', api_key: '', model: 'lla
   lang: 'cn',
   mode: 'custom',
   help: 'RM(1) manual',
-  explanation: '### 功能\n删除文件（缓存版）',
+  explanation: '### 功能\n删除文件（缓存版）\n' + '### 帮助原文逐行对照翻译\nRM(1) manual\n删除文件手册',
   helpHash: 'oldhash',
   createdAt: 1000,
   updatedAt: 1000,
@@ -112,19 +112,22 @@ describe('run', () => {
     errSpy.mockRestore();
   });
 
-  it('成功流：帮助原文 + 分隔线 + AI 解释', async () => {
+  it('成功流：只输出 AI 解释（含翻译对照，不再展示独立原版帮助）', async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     readCacheMock.mockReturnValue(null);
     fetchHelpMock.mockResolvedValue('RM(1) manual');
-    completeMock.mockResolvedValue('### 功能\n删除文件');
+    completeMock.mockResolvedValue(
+      '### 功能\n删除文件\n' +
+        '### 常用范例\n示例\n' +
+        '### 帮助原文逐行对照翻译\nRM(1) manual\n删除文件手册（第 1 行）',
+    );
     const [lines, spy, errSpy] = capture('ERR:');
     const code = await run(['rm', '-rf', '/']);
     expect(code).toBe(0);
     const out = lines.join('\n');
-    expect(out).toContain('RM(1) manual');
-    expect(out).toContain('────────');
     expect(out).toContain('### 功能\n删除文件');
-    expect(out.indexOf('RM(1) manual')).toBeLessThan(out.indexOf('### 功能'));
+    expect(out).toContain('删除文件手册（第 1 行）');
+    expect(out).not.toContain('────────'); // 不再有分隔线，也不再单独展示原版帮助
     expect(fetchHelpMock).toHaveBeenCalledWith('rm');
     expect(writeCacheMock).toHaveBeenCalledWith(
       expect.objectContaining({ command: 'rm', lang: 'cn', mode: 'custom', helpHash: expect.any(String), changed: false }),
@@ -140,8 +143,8 @@ describe('run', () => {
     const code = await run(['rm']);
     expect(code).toBe(0);
     const out = lines.join('\n');
-    expect(out).toContain('RM(1) manual');
     expect(out).toContain('删除文件（缓存版）');
+    expect(out).toContain('### 帮助原文逐行对照翻译'); // 缓存解释自带翻译小节
     expect(out).toContain('缓存');
     expect(out).toContain('后台校验');
     expect(completeMock).not.toHaveBeenCalled();
@@ -154,7 +157,11 @@ describe('run', () => {
   });
 
   it('缓存命中但后台已检测到变化 → 直接输出新结果并清除 changed 标记', async () => {
-    readCacheMock.mockReturnValue({ ...CACHED, changed: true, explanation: '### 功能\n新解释' });
+    readCacheMock.mockReturnValue({
+      ...CACHED,
+      changed: true,
+      explanation: '### 功能\n新解释\n' + '### 帮助原文逐行对照翻译\nRM(1) manual\n新翻译',
+    });
     const [lines, spy, errSpy] = capture('ERR:');
     const code = await run(['rm']);
     expect(code).toBe(0);
@@ -240,7 +247,7 @@ describe('run', () => {
     expect(code).toBe(0);
     const entry = writeCacheMock.mock.calls[0]![0];
     expect(entry.changed).toBe(false);
-    expect(entry.explanation).toBe('### 功能\n删除文件（缓存版）');
+    expect(entry.explanation).toContain('删除文件（缓存版）');
     expect(entry.help).toBe('RM(1) manual');
     spy.mockRestore();
     errSpy.mockRestore();
@@ -275,14 +282,13 @@ describe('run', () => {
     errSpy.mockRestore();
   });
 
-  it('帮助不可用 + AI 成功 → 加注通用知识提示', async () => {
+  it('帮助不可用 + AI 成功 → 直接输出 AI 解释', async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     fetchHelpMock.mockResolvedValue(null);
     completeMock.mockResolvedValue('### 功能\n推测');
     const [lines, spy, errSpy] = capture('ERR:');
     const code = await run(['foo']);
     expect(code).toBe(0);
-    expect(lines.join('\n')).toContain('本地帮助不可用');
     expect(lines.join('\n')).toContain('### 功能\n推测');
     spy.mockRestore();
     errSpy.mockRestore();
@@ -502,7 +508,7 @@ describe('run', () => {
     errSpy.mockRestore();
   });
 
-  it('帮助原文超过 60 行时显示层截断并提示剩余行数', async () => {
+  it('帮助原文超长时，仅完整帮助交给 AI，输出不再显示原版帮助', async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     readCacheMock.mockReturnValue(null);
     const longHelp = Array.from({ length: 80 }, (_, i) => `line ${i + 1}`).join('\n');
@@ -512,6 +518,23 @@ describe('run', () => {
     const code = await run(['rm']);
     expect(code).toBe(0);
     const out = lines.join('\n');
+    expect(out).not.toContain('line 1');      // 输出不展示原版帮助
+    expect(out).not.toContain('此处仅显示前 60 行');
+    expect(fetchHelpMock).toHaveBeenCalledWith('rm'); // 完整帮助已交给 AI
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('AI 解释失败时兜底展示截断的帮助原文', async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    readCacheMock.mockReturnValue(null);
+    const longHelp = Array.from({ length: 80 }, (_, i) => `line ${i + 1}`).join('\n');
+    fetchHelpMock.mockResolvedValue(longHelp);
+    completeMock.mockRejectedValue(new Error('boom'));
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['rm']);
+    expect(code).toBe(1);
+    const out = lines.join('\n');
     expect(out).toContain('line 1');
     expect(out).toContain('line 60');
     expect(out).not.toContain('line 61');
@@ -520,15 +543,15 @@ describe('run', () => {
     errSpy.mockRestore();
   });
 
-  it('帮助原文 60 行以内完整显示不截断', async () => {
+  it('帮助原文 60 行以内协底完整显示不截断', async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     readCacheMock.mockReturnValue(null);
     const shortHelp = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join('\n');
     fetchHelpMock.mockResolvedValue(shortHelp);
-    completeMock.mockResolvedValue('### 功能\n删除文件');
+    completeMock.mockRejectedValue(new Error('boom'));
     const [lines, spy, errSpy] = capture('ERR:');
     const code = await run(['rm']);
-    expect(code).toBe(0);
+    expect(code).toBe(1);
     const out = lines.join('\n');
     expect(out).toContain('line 30');
     expect(out).not.toContain('此处仅显示前 60 行');
@@ -536,16 +559,19 @@ describe('run', () => {
     errSpy.mockRestore();
   });
 
-  it('AI 解释失败且帮助超长时，原文同样截断', async () => {
+  it('旧版缓存（无翻译小节）被视为失效，强制用新格式重新生成', async () => {
     loadConfigMock.mockReturnValue(CONFIG);
-    fetchHelpMock.mockResolvedValue(Array.from({ length: 80 }, (_, i) => `line ${i + 1}`).join('\n'));
-    completeMock.mockRejectedValue(new Error('boom'));
+    readCacheMock.mockReturnValue({ ...CACHED, explanation: '### 功能\n旧版内容' });
+    fetchHelpMock.mockResolvedValue('RM(1) manual');
+    completeMock.mockResolvedValue('### 功能\n新版内容\n' + '### 帮助原文逐行对照翻译\nRM(1) manual\n翻译');
     const [lines, spy, errSpy] = capture('ERR:');
     const code = await run(['rm']);
-    expect(code).toBe(1);
+    expect(code).toBe(0);
     const out = lines.join('\n');
-    expect(out).toContain('此处仅显示前 60 行');
-    expect(out).not.toContain('line 80');
+    expect(out).toContain('旧版缓存');
+    expect(out).toContain('新版内容');
+    expect(out).not.toContain('旧版内容');
+    expect(writeCacheMock).toHaveBeenCalled();
     spy.mockRestore();
     errSpy.mockRestore();
   });

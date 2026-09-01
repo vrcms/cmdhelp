@@ -22,11 +22,13 @@ describe('languageName', () => {
 });
 
 describe('buildSystemPrompt', () => {
-  it('包含三段输出结构与来源标注约束', () => {
+  it('包含五段输出结构与来源标注约束', () => {
     const p = buildSystemPrompt();
     expect(p).toContain('### 功能');
     expect(p).toContain('### 常用参数');
-    expect(p).toContain('### 示例');
+    expect(p).toContain('### 常用范例');
+    expect(p).toContain('### 特别提示');
+    expect(p).toContain('### 帮助原文逐行对照翻译');
     expect(p).toContain('本地帮助不可用');
   });
 
@@ -59,11 +61,12 @@ describe('buildQuestionPrompt', () => {
     expect(p).toContain('用户问题');
   });
 
-  it('自然语言系统提示词包含三段结构与语言', () => {
+  it('自然语言系统提示词包含四段结构与语言', () => {
     const p = buildQuestionSystemPrompt('cn');
     expect(p).toContain('### 功能');
     expect(p).toContain('### 常用参数');
-    expect(p).toContain('### 示例');
+    expect(p).toContain('### 常用范例');
+    expect(p).toContain('### 特别提示');
     expect(p).toContain('中文');
   });
 

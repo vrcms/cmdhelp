@@ -3,6 +3,8 @@ const ANSI = {
   yellow: '\u001b[33;1m',
   blue: '\u001b[34;1m',
   cyan: '\u001b[36m',
+  magenta: '\u001b[35;1m',
+  red: '\u001b[31;1m',
   dim: '\u001b[2m',
 } as const;
 

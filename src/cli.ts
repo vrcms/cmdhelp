@@ -37,6 +37,7 @@ const EXIT_FAIL = 1;
 const EXIT_BAD_INPUT = 2;
 const EXIT_NO_CONFIG = 3;
 const DISPLAY_HELP_MAX_LINES = 60;
+const TRANSLATION_SECTION = '### 帮助原文逐行对照翻译';
 
 export async function run(argv: string[]): Promise<number> {
   const first = argv[0];
@@ -107,7 +108,12 @@ export async function run(argv: string[]): Promise<number> {
   }
 
   const cached = readCache(cacheKey(command, getLang(), getMode()));
-  if (cached) {
+  // 0.1.8 起输出结构升级（含逐行中英对照翻译），旧格式缓存视为失效，强制重新生成
+  const staleCache = cached && !cached.explanation.includes(TRANSLATION_SECTION);
+  if (staleCache) {
+    process.stderr.write('（检测到旧版缓存，正在用新格式重新生成…）\n');
+  }
+  if (cached && !staleCache) {
     if (isGarbledHelp(cached.help)) {
       // 旧缓存因 GBK 解码错误导致乱码，视为无效，直接走重新生成
       process.stderr.write('（检测到历史缓存乱码，已自动清理并重新生成…）\n');
@@ -325,15 +331,17 @@ async function refresh(command: string): Promise<void> {
 }
 
 function printResult(help: string | null, explanation: string | null): void {
-  if (help) {
-    const display = truncateHelp(help);
-    console.log(display);
-    console.log(dimLine(separator()));
-  } else {
-    console.log('注：本地帮助不可用，以下基于通用知识，可能与当前系统版本有差异。\n');
-  }
+  // 主输出为 AI 解释（含功能/常用参数/常用范例/特别提示 + 逐行中英对照翻译），不再展示原版帮助
   if (explanation) {
     console.log(formatExplanation(explanation));
+    return;
+  }
+  // AI 解释失败时兜底：展示截断的本地帮助原文
+  if (help) {
+    console.log(truncateHelp(help));
+    console.log(dimLine(separator()));
+  } else {
+    console.log('注：本地帮助不可用。\n');
   }
 }
 
@@ -391,7 +399,7 @@ async function printUsage(): Promise<void> {
       cmdhelp 如何列目录
       cmdhelp how to list files
 
-说明：命令查询只读本地 man/help/Get-Help，绝不执行目标命令；自然语言提问直接走 AI。
+说明：查询会给出 AI 总结（功能/常用参数/常用范例/特别提示）+ 帮助逐行中英对照翻译，不执行目标命令。
   免费模式受限流影响，查不到时可 setup 配置其他服务。
   查询结果会缓存，再次运行时秒出旧结果并后台校验帮助是否有变化。
   当前通过 npx 运行；想直接用 cmdhelp 命令（免 npx 前缀），可全局安装：npm i -g cmdhelp
