@@ -74,13 +74,14 @@ async function requestOnce(
     throw e;
   }
   const data = (await response.json()) as {
-    choices?: { message?: { content?: string } }[];
+    choices?: { message?: { content?: string; reasoning_content?: string } }[];
   };
-  const content = data.choices?.[0]?.message?.content;
-  if (!content || content.trim() === '') {
+  const raw = data.choices?.[0]?.message;
+  const content = raw?.content?.trim() ? raw.content.trim() : raw?.reasoning_content?.trim();
+  if (!content) {
     throw new NotRetryableError('AI 响应缺少内容字段');
   }
-  return content.trim();
+  return content;
 }
 
 class NotRetryableError extends Error {}
