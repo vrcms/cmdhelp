@@ -11,14 +11,23 @@ export function estimateMessagesTokens(messages: ChatMessage[]): number {
   return estimateTokens(JSON.stringify(messages));
 }
 
-// 参考 opencode session/overflow.ts + compaction.ts 的 preserveRecentBudget
-// big-pickle 未公布 context，按 8k 保守估算；可用区 = context - reserved(max_tokens/预留)
-// 单次交互只保留最近若干轮，避免每次都重发 help 全文
-const MAX_CONTEXT_CHARS = 12_000; // 约 3k tokens，留足输入+输出
-const RESERVED_CHARS = 6_000; // 约 1.5k tokens 给输出
-const USABLE_CHARS = MAX_CONTEXT_CHARS - RESERVED_CHARS;
+// 参考 opencode 真正逻辑：
+// overflow.ts: usable = model.limit.context - reserved
+//   reserved = min(COMPACTION_BUFFER 20k tokens, maxOutputTokens)
+// compaction.ts: preserveRecentBudget = min(15k, max(2k, floor(usable*0.25)))
+// 之前把 12k chars 当成整个 context 是看错了，COMPACTION_BUFFER 是预留不是上限
+// 常见模型 65k/128k/200k，按 128k 基准；cmdhelp help 约 5k chars，几十轮都不会超
+const MODEL_CONTEXT_TOKENS = 128_000;
+const COMPACTION_BUFFER_TOKENS = 20_000;
+const RESERVED_TOKENS = 4_000; // 覆盖 MAX_TOKENS 1500 + 开销，对齐 maxOutputTokens
+const USABLE_TOKENS = MODEL_CONTEXT_TOKENS - Math.min(COMPACTION_BUFFER_TOKENS, RESERVED_TOKENS);
+const TAIL_TOKENS = Math.min(15_000, Math.max(2_000, Math.floor(USABLE_TOKENS * 0.25))); // 15k tokens
+const MAX_CONTEXT_TOKENS = MODEL_CONTEXT_TOKENS;
+const MAX_CONTEXT_CHARS = MAX_CONTEXT_TOKENS * CHARS_PER_TOKEN;
+const USABLE_CHARS = USABLE_TOKENS * CHARS_PER_TOKEN;
+const TAIL_CHARS = TAIL_TOKENS * CHARS_PER_TOKEN;
 const MIN_TAIL_TURNS = 2;
-const MAX_TAIL_TURNS = 6;
+const MAX_TAIL_TURNS = 20; // 128k 下保留 20 轮绰绰有余，之前 6 轮是按 8k 误设
 
 export interface ChatContext {
   command: string;
@@ -50,21 +59,21 @@ export function buildMessages(ctx: ChatContext, newQuestion?: string): ChatMessa
     { role: 'system', content: ctx.systemPrompt },
     { role: 'user', content: ctx.helpPrompt },
   ];
-  const tailBudget = USABLE_CHARS - estimateMessagesTokens(base);
+  const baseTokens = estimateMessagesTokens(base);
+  const tailBudgetTokens = TAIL_TOKENS;
+  // 128k 下 tailBudget 15k tokens 约 60k chars，help 5k + 20轮(20*1k)也仅 25k，基本不裁
+  void baseTokens;
+  const tailBudget = TAIL_CHARS;
   // 选择尾部历史：从最新往前累计，直至 budget 或轮数上限
   const keep: ChatMessage[] = [];
   let used = 0;
-  // history 已经是 [assistant, user, assistant, ...] 交替，取整轮
-  // 为简化：从尾部每次取 2 条（一问一答），最后可能剩单条 assistant
   for (let i = ctx.history.length - 1; i >= 0; ) {
     const turn: ChatMessage[] = [];
-    // 取 assistant
     if (i >= 0) {
       turn.unshift(ctx.history[i]!);
       used += estimateTokens(ctx.history[i]!.content);
       i--;
     }
-    // 取对应的 user
     if (i >= 0 && ctx.history[i]!.role === 'user') {
       turn.unshift(ctx.history[i]!);
       used += estimateTokens(ctx.history[i]!.content);
@@ -77,9 +86,8 @@ export function buildMessages(ctx: ChatContext, newQuestion?: string): ChatMessa
   }
   const messages: ChatMessage[] = [...base, ...keep];
   if (newQuestion) messages.push({ role: 'user', content: newQuestion });
-  // 兜底：若仍超限，丢弃最早的 keep 轮次（opencode prune 思想简化版）
-  while (estimateMessagesTokens(messages) * CHARS_PER_TOKEN > MAX_CONTEXT_CHARS && keep.length > 2) {
-    // 每次丢 2 条
+  // 兜底：只有总 tokens 真超 128k 才丢弃（基本不会触发）
+  while (estimateMessagesTokens(messages) > MAX_CONTEXT_TOKENS && keep.length > 2) {
     keep.splice(0, 2);
     messages.splice(2, 2);
   }
