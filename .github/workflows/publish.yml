@@ -19,10 +19,11 @@ jobs:
           registry-url: https://registry.npmjs.org/
       - run: npm ci
       - name: OIDC publish (provenance)
+        id: oidc
         continue-on-error: true
         run: npm publish --access public --provenance
       - name: Token fallback publish
-        if: ${{ !cancelled() }}
+        if: ${{ steps.oidc.outcome == 'failure' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public
