@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnUpdateCheck } from './update.js';
 import { VERSION } from './version.js';
@@ -408,7 +409,19 @@ async function runSetup(): Promise<boolean> {
   }
 }
 
-const isMain = import.meta.url === pathToFileURL(process.argv[1] ?? '').href;
+const isMain = import.meta.url === pathToFileURL(process.argv[1] ?? '').href || isMainViaSymlink();
+
+function isMainViaSymlink(): boolean {
+  // npx 通过 node_modules/.bin/cmdhelp 软链启动时，argv[1] 是软链路径，
+  // 而 import.meta.url 已被 realpath 解析，二者不等；用 realpath 比较兜底。
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
 if (isMain) {
   main().then((code) => {
     process.exitCode = code;
