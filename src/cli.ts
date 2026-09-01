@@ -22,6 +22,7 @@ import {
 } from './config.js';
 import { startSpinner } from './feedback.js';
 import { completeFree } from './free_client.js';
+import { createContext, buildMessages, pushTurn } from './context.js';
 import { dimLine, formatExplanation } from './format.js';
 import { fetchHelp } from './help_source.js';
 import {
@@ -391,24 +392,10 @@ async function runInteractiveLoop(
   freeTier?: boolean,
 ): Promise<void> {
   const rl = createInterface({ input: stdin, output: stdout });
-  // 对话历史：man 全文只在首条 user 消息里出现一次，后续靠历史记忆，避免每次都重发导致上下文爆炸
-  const messages: ChatMessage[] = [
-    { role: 'system' as const, content: buildSystemPrompt(lang) },
-    { role: 'user' as const, content: buildUserPrompt(command, help) },
-    { role: 'assistant' as const, content: initialExplanation },
-  ];
-
-  // 保留首轮上下文 + 最近 4 轮追问（8 条消息），超出则滑动窗口丢弃中间轮次
-  const MAX_TURNS = 4;
-  const trimHistory = (): void => {
-    const keepTail = MAX_TURNS * 2;
-    if (messages.length > 3 + keepTail) {
-      const head = messages.slice(0, 3);
-      const tail = messages.slice(-keepTail);
-      messages.length = 0;
-      messages.push(...head, ...tail);
-    }
-  };
+  // 简易上下文管理：参考 opencode compaction/overflow
+  // help 只在 helpPrompt 中出现一次（base），history 只存问答轮次，
+  // 每次按 token 预算裁剪 tail，避免重复发送导致 8k 上下文溢出
+  const ctx = createContext(command, help, lang, initialExplanation);
 
   process.stdout.write(`\n关于 ${command} 还有什么想问的？（例如：-p 参数原文是什么样的）直接回车退出。\n`);
   while (true) {
@@ -429,22 +416,14 @@ async function runInteractiveLoop(
       continue;
     }
 
-    // 上下文防爆炸：追问时若问题含具体参数（如 -p），只带该参数的原文片段而非全文，节省 token
-    const helpSnippet = extractHelpSnippet(help, input);
-    const followUp: ChatMessage[] = [
-      ...messages,
-      {
-        role: 'user' as const,
-        content: `用户追问：${input}\n${helpSnippet ? `相关帮助原文片段：\n${helpSnippet}\n` : ''}请直接回答用户问题，给出可直接运行的命令（IP/端口用用户给的真实值，不要占位符）。若问原文则引用片段并翻译。`,
-      },
-    ];
+    // 直接把用户原文作为新提问，上下文管理器负责拼接 base+tail
+    const followUp = buildMessages(ctx, input);
     const stopAi = startSpinner('正在思考…');
     try {
       const answer = freeTier ? await completeFree(config, followUp) : await complete(config, followUp, {});
       stopAi();
       console.log(formatExplanation(answer));
-      messages.push({ role: 'user' as const, content: input }, { role: 'assistant' as const, content: answer });
-      trimHistory();
+      pushTurn(ctx, input, answer);
     } catch (err) {
       stopAi();
       if (freeTier && (err as AiError).status === 429) {
@@ -456,20 +435,6 @@ async function runInteractiveLoop(
   }
   rl.close();
   process.stdout.write('已退出交互。\n');
-}
-
-function extractHelpSnippet(help: string | null, query: string): string | null {
-  if (!help) return null;
-  // 若追问含 -x 形式参数，提取该参数段落（前后各 8 行），否则返回 null 让模型用完整上下文
-  const paramMatch = query.match(/(^|\s)(-\w)\b/);
-  if (!paramMatch) return null;
-  const param = paramMatch[2];
-  const lines = help.split('\n');
-  const idx = lines.findIndex((l) => l.includes(param));
-  if (idx === -1) return null;
-  const start = Math.max(0, idx - 2);
-  const end = Math.min(lines.length, idx + 10);
-  return lines.slice(start, end).join('\n');
 }
 
 function truncateHelp(help: string): string {
