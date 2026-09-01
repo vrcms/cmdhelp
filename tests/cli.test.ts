@@ -65,7 +65,7 @@ const CONFIG = { base_url: 'http://127.0.0.1:11434/v1', api_key: '', model: 'lla
   lang: 'cn',
   mode: 'custom',
   help: 'RM(1) manual',
-  explanation: '### 功能\n删除文件（缓存版）\n' + '### 帮助原文逐行对照翻译\nRM(1) manual\n删除文件手册',
+  explanation: '### 功能\n删除文件（缓存版）',
   helpHash: 'oldhash',
   createdAt: 1000,
   updatedAt: 1000,
@@ -116,17 +116,12 @@ describe('run', () => {
     loadConfigMock.mockReturnValue(CONFIG);
     readCacheMock.mockReturnValue(null);
     fetchHelpMock.mockResolvedValue('RM(1) manual');
-    completeMock.mockResolvedValue(
-      '### 帮助原文逐行对照翻译\nRM(1) manual\n删除文件手册\n' +
-        '### 功能\n删除文件\n' +
-        '### 常用范例\n示例',
-    );
+    completeMock.mockResolvedValue('### 功能\n删除文件');
     const [lines, spy, errSpy] = capture('ERR:');
     const code = await run(['rm', '-rf', '/']);
     expect(code).toBe(0);
     const out = lines.join('\n');
     expect(out).toContain('### 功能\n删除文件');
-    expect(out).toContain('删除文件手册');
     expect(out).not.toContain('────────'); // 不再有分隔线，也不再单独展示原版帮助
     expect(fetchHelpMock).toHaveBeenCalledWith('rm');
     expect(writeCacheMock).toHaveBeenCalledWith(
@@ -144,7 +139,6 @@ describe('run', () => {
     expect(code).toBe(0);
     const out = lines.join('\n');
     expect(out).toContain('删除文件（缓存版）');
-    expect(out).toContain('### 帮助原文逐行对照翻译'); // 缓存解释自带翻译小节
     expect(out).toContain('缓存');
     expect(out).toContain('后台校验');
     expect(completeMock).not.toHaveBeenCalled();
@@ -160,7 +154,7 @@ describe('run', () => {
     readCacheMock.mockReturnValue({
       ...CACHED,
       changed: true,
-      explanation: '### 帮助原文逐行对照翻译\nRM(1) manual\n新翻译\n### 功能\n新解释',
+      explanation: '### 功能\n新解释',
     });
     const [lines, spy, errSpy] = capture('ERR:');
     const code = await run(['rm']);
@@ -555,23 +549,6 @@ describe('run', () => {
     const out = lines.join('\n');
     expect(out).toContain('line 30');
     expect(out).not.toContain('此处仅显示前 60 行');
-    spy.mockRestore();
-    errSpy.mockRestore();
-  });
-
-  it('旧版缓存（无翻译小节）被视为失效，强制用新格式重新生成', async () => {
-    loadConfigMock.mockReturnValue(CONFIG);
-    readCacheMock.mockReturnValue({ ...CACHED, explanation: '### 功能\n旧版内容' });
-    fetchHelpMock.mockResolvedValue('RM(1) manual');
-    completeMock.mockResolvedValue('### 帮助原文逐行对照翻译\nRM(1) manual\n翻译\n### 功能\n新版内容');
-    const [lines, spy, errSpy] = capture('ERR:');
-    const code = await run(['rm']);
-    expect(code).toBe(0);
-    const out = lines.join('\n');
-    expect(out).toContain('旧版缓存');
-    expect(out).toContain('新版内容');
-    expect(out).not.toContain('旧版内容');
-    expect(writeCacheMock).toHaveBeenCalled();
     spy.mockRestore();
     errSpy.mockRestore();
   });

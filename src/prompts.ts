@@ -24,9 +24,6 @@ export function buildSystemPrompt(lang = 'cn'): string {
 
 输出必须按以下顺序使用 Markdown 三级标题小节：
 
-### 帮助原文逐行对照翻译
-将【本地帮助】原文逐行翻译，保持"原文一行、译文一行"的对照格式：先输出该行英文原文，紧跟着一行使用【${languageName(lang)}】的翻译。不要合并行、不要跳行、不要改写原文结构，逐行一一对应翻译到底。若原文某行为空行则保留空行。
-
 ### 功能
 用一两句话说明该命令是做什么的。
 
@@ -35,8 +32,12 @@ export function buildSystemPrompt(lang = 'cn'): string {
 
 ### 常用范例
 给出 3-4 个最常见的实际用法，每个示例前用一句话说明使用场景，示例必须用 \`\`\` 代码块包裹。
-注意：示例必须用真实可替换的值，不要用占位符（禁止 user@remote.server.com 之类）。
-例如 SSH 用 192.168.1.100 这种真实 IP，rm 用实际文件路径，git 用真实仓库地址。示例必须是"改掉 IP/路径就能直接跑"的那种，不要解释概念。
+⚠️ 范例必须用真实可直接运行的值，禁止占位符：
+- 禁止 user@remote.server.com / example.com / your_file 这类假值
+- SSH 必须用 root@192.168.1.100 这类真实内网 IP
+- rm 必须用 /var/log/app.log 这类真实路径
+- git 必须用 https://github.com/user/project.git 这类真实地址
+范例必须是"改个 IP/路径就能直接跑"的生产级示例。
 
 ### 特别提示
 列出 1-2 条实际使用中常见的坑、安全隐患或易错点（若本地帮助中确无相关内容，可省略本小节）。

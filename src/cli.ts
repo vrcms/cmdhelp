@@ -6,7 +6,7 @@ import { spawnUpdateCheck } from './update.js';
 import { VERSION } from './version.js';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
-import { complete, type AiError, type CompleteOptions } from './ai_client.js';
+import { complete, type AiError, type ChatMessage, type CompleteOptions } from './ai_client.js';
 import { cacheKey, clearCache, hashHelp, readCache, writeCache } from './cache.js';
 import {
   FREE_PRESET,
@@ -37,7 +37,6 @@ const EXIT_FAIL = 1;
 const EXIT_BAD_INPUT = 2;
 const EXIT_NO_CONFIG = 3;
 const DISPLAY_HELP_MAX_LINES = 60;
-const TRANSLATION_SECTION = '### 帮助原文逐行对照翻译';
 
 export async function run(argv: string[]): Promise<number> {
   const first = argv[0];
@@ -108,12 +107,7 @@ export async function run(argv: string[]): Promise<number> {
   }
 
   const cached = readCache(cacheKey(command, getLang(), getMode()));
-  // 0.1.8 起输出结构升级（含逐行中英对照翻译），旧格式缓存视为失效，强制重新生成
-  const staleCache = cached && !cached.explanation.includes(TRANSLATION_SECTION);
-  if (staleCache) {
-    process.stderr.write('（检测到旧版缓存，正在用新格式重新生成…）\n');
-  }
-  if (cached && !staleCache) {
+  if (cached) {
     if (isGarbledHelp(cached.help)) {
       // 旧缓存因 GBK 解码错误导致乱码，视为无效，直接走重新生成
       process.stderr.write('（检测到历史缓存乱码，已自动清理并重新生成…）\n');
@@ -121,6 +115,10 @@ export async function run(argv: string[]): Promise<number> {
       printResult(cached.help, cached.explanation);
       process.stderr.write('（检测到命令帮助有更新，已重新生成结果）\n');
       writeCache({ ...cached, changed: false });
+      if (shouldEnterInteractive()) {
+        const ai = resolveAi();
+        if (ai) await runInteractiveLoop(cached.command, cached.help, cached.explanation, ai.config, cached.lang, ai.freeTier);
+      }
       return EXIT_OK;
     } else {
       printResult(cached.help, cached.explanation);
@@ -130,6 +128,11 @@ export async function run(argv: string[]): Promise<number> {
       } else {
         const at = new Date(cached.updatedAt).toLocaleString();
         process.stderr.write(`（${at} 生成 · 后台校验中…）\n`);
+      }
+      if (shouldEnterInteractive()) {
+        const ai = resolveAi();
+        if (ai) await runInteractiveLoop(cached.command, cached.help, cached.explanation, ai.config, cached.lang, ai.freeTier);
+        return EXIT_OK;
       }
       spawnRefresh(command);
       return EXIT_OK;
@@ -253,7 +256,7 @@ async function explain(
   const help = await fetchHelp(command);
   stop();
 
-  const messages = [
+  const messages: ChatMessage[] = [
     { role: 'system' as const, content: buildSystemPrompt(lang) },
     { role: 'user' as const, content: buildUserPrompt(command, help) },
   ];
@@ -276,8 +279,21 @@ async function explain(
       changed: false,
     });
     printResult(help, explanation);
+    if (shouldEnterInteractive()) {
+      await runInteractiveLoop(command, help, explanation, config, lang, aiOpts.freeTier);
+    }
     return EXIT_OK;
   } catch (err) {
+    // 429 限流时，若有旧缓存的总结，优先展示缓存（比只展示英文 help 更有用）
+    const fallbackCache = readCache(cacheKey(command, lang, getMode()));
+    if (fallbackCache && fallbackCache.explanation) {
+      process.stderr.write('（AI 额度/限流，展示上次缓存的总结）\n');
+      printResult(fallbackCache.help, fallbackCache.explanation);
+      if (shouldEnterInteractive()) {
+        await runInteractiveLoop(command, fallbackCache.help, fallbackCache.explanation, config, lang, aiOpts.freeTier);
+      }
+      return EXIT_OK;
+    }
     if (help) {
       console.log(truncateHelp(help));
       console.log(dimLine(separator()));
@@ -331,7 +347,7 @@ async function refresh(command: string): Promise<void> {
 }
 
 function printResult(help: string | null, explanation: string | null): void {
-  // 主输出为 AI 解释（含功能/常用参数/常用范例/特别提示 + 逐行中英对照翻译），不再展示原版帮助
+  // 主输出为 AI 解释（功能/常用参数/常用范例/特别提示），不再展示原版帮助
   if (explanation) {
     console.log(formatExplanation(explanation));
     return;
@@ -343,6 +359,86 @@ function printResult(help: string | null, explanation: string | null): void {
   } else {
     console.log('注：本地帮助不可用。\n');
   }
+}
+
+function shouldEnterInteractive(): boolean {
+  if (process.env.CMDHELP_NO_INTERACTIVE === '1' || process.env.CI) return false;
+  // 仅 TTY 交互终端才进入追问模式，避免管道/CI 卡住
+  return Boolean(stdin.isTTY && stdout.isTTY);
+}
+
+async function runInteractiveLoop(
+  command: string,
+  help: string | null,
+  initialExplanation: string,
+  config: Config,
+  lang: string,
+  freeTier?: boolean,
+): Promise<void> {
+  const rl = createInterface({ input: stdin, output: stdout });
+  // 对话历史：man 全文只在首条 user 消息里出现一次，后续靠历史记忆，避免每次都重发导致上下文爆炸
+  const messages: ChatMessage[] = [
+    { role: 'system' as const, content: buildSystemPrompt(lang) },
+    { role: 'user' as const, content: buildUserPrompt(command, help) },
+    { role: 'assistant' as const, content: initialExplanation },
+  ];
+
+  // 保留首轮上下文 + 最近 4 轮追问（8 条消息），超出则滑动窗口丢弃中间轮次
+  const MAX_TURNS = 4;
+  const trimHistory = (): void => {
+    const keepTail = MAX_TURNS * 2;
+    if (messages.length > 3 + keepTail) {
+      const head = messages.slice(0, 3);
+      const tail = messages.slice(-keepTail);
+      messages.length = 0;
+      messages.push(...head, ...tail);
+    }
+  };
+
+  process.stdout.write(`\n关于 ${command} 还有什么想问的？（例如：-p 参数原文是什么样的）直接回车退出。\n`);
+  while (true) {
+    let input: string;
+    try {
+      input = (await rl.question(`${command}> `)).trim();
+    } catch {
+      break; // Ctrl+D
+    }
+    if (!input) break;
+    if (/^(exit|quit|:q|q|bye)$/i.test(input)) break;
+    if (/^(clear|cls)$/i.test(input)) {
+      console.clear();
+      continue;
+    }
+    if (/^help$/i.test(input)) {
+      process.stdout.write('输入问题继续提问，回车退出，clear 清屏，exit 退出。\n');
+      continue;
+    }
+
+    const followUp: ChatMessage[] = [
+      ...messages,
+      {
+        role: 'user' as const,
+        content: `用户追问：${input}\n请基于上面的【本地帮助】回答。若用户询问某参数的原文，请直接引用帮助中该参数对应的原始英文段落（保持原样）并给出中文解释。`,
+      },
+    ];
+    const stopAi = startSpinner('正在思考…');
+    try {
+      const answer = freeTier ? await completeFree(config, followUp) : await complete(config, followUp, {});
+      stopAi();
+      console.log(formatExplanation(answer));
+      messages.push({ role: 'user' as const, content: input }, { role: 'assistant' as const, content: answer });
+      trimHistory();
+    } catch (err) {
+      stopAi();
+      if (freeTier && (err as AiError).status === 429) {
+        process.stderr.write('错误：免费模型当前限流（429），请稍后再试。\n');
+      } else {
+        process.stderr.write(`错误：AI 调用失败：${(err as Error).message}\n`);
+      }
+    }
+  }
+  rl.close();
+  process.stdout.write('已退出交互。\n');
 }
 
 function truncateHelp(help: string): string {
@@ -399,7 +495,8 @@ async function printUsage(): Promise<void> {
       cmdhelp 如何列目录
       cmdhelp how to list files
 
-说明：查询会给出 AI 总结（功能/常用参数/常用范例/特别提示）+ 帮助逐行中英对照翻译，不执行目标命令。
+说明：查询会给出 AI 总结（功能/常用参数/常用范例/特别提示），支持交互式追问（基于完整帮助原文，防上下文爆炸）。
+  追问时会保留完整帮助上下文，例如：cmdhelp ssh 后可继续问“-p 参数原文是什么样的”。
   免费模式受限流影响，查不到时可 setup 配置其他服务。
   查询结果会缓存，再次运行时秒出旧结果并后台校验帮助是否有变化。
   当前通过 npx 运行；想直接用 cmdhelp 命令（免 npx 前缀），可全局安装：npm i -g cmdhelp
