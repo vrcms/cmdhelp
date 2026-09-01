@@ -154,6 +154,19 @@ function resolveAi(): { config: Config; freeTier: boolean } | null {
     };
   }
   const config = loadConfig();
+  // 兼容旧版本 bug：选了免费预设却被存成 custom（base_url/model 与 FREE_PRESET 一致），自动视为 free 并修复文件
+  if (
+    config &&
+    config.base_url === FREE_PRESET.base_url &&
+    config.model === FREE_PRESET.model &&
+    (config.api_key === '' || config.api_key === 'public')
+  ) {
+    setMode('free');
+    return {
+      config: { base_url: FREE_PRESET.base_url, api_key: 'public', model: FREE_PRESET.model },
+      freeTier: true,
+    };
+  }
   return config ? { config, freeTier: false } : null;
 }
 
@@ -551,8 +564,13 @@ async function runSetup(): Promise<boolean> {
         return false;
       }
     }
-    saveConfig({ base_url, api_key, model });
-    process.stdout.write(`已写入 ${configPath()}。现在可以查询命令了，例如：cmdhelp git\n`);
+    if (preset === FREE_PRESET) {
+      setMode('free');
+      process.stdout.write(`已写入 ${configPath()}。已切换到免费模式（big-pickle），现在可以查询了，例如：cmdhelp git\n`);
+    } else {
+      saveConfig({ base_url, api_key, model });
+      process.stdout.write(`已写入 ${configPath()}。现在可以查询命令了，例如：cmdhelp git\n`);
+    }
     if (isNpxRun()) {
       process.stdout.write(
         '提示：当前通过 npx 临时运行，直接输入 cmdhelp 会提示 command not found。\n',
