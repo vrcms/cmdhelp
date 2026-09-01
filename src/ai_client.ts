@@ -14,7 +14,7 @@ export interface AiError extends Error {
   status?: number;
 }
 
-const REQUEST_TIMEOUT_MS = 30_000;
+const REQUEST_TIMEOUT_MS = 60_000;
 const MAX_TOKENS = 1500;
 const TEMPERATURE = 0.3;
 const MAX_ATTEMPTS = 2;
