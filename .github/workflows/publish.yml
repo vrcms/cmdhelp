@@ -23,7 +23,7 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "Checking cmdhelp@$VERSION on npm..."
-          if npm view "cmdhelp@$VERSION" version --json 2>/dev/null | grep -q "$VERSION"; then
+          if npm view "cmdhelp@$VERSION" version >/dev/null 2>&1; then
             echo "already_published=true" >> $GITHUB_OUTPUT
             echo "Version $VERSION already published, skipping publish."
           else
