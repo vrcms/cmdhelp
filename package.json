@@ -31,6 +31,10 @@
     "explain"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vrcms/cmdhelp.git"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "pkg": "^5.8.1",
