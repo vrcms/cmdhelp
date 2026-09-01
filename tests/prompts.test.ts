@@ -22,14 +22,16 @@ describe('languageName', () => {
 });
 
 describe('buildSystemPrompt', () => {
-  it('包含五段输出结构与来源标注约束', () => {
+  it('包含五段输出结构（翻译在前，总结在后）', () => {
     const p = buildSystemPrompt();
+    expect(p).toContain('### 帮助原文逐行对照翻译');
     expect(p).toContain('### 功能');
     expect(p).toContain('### 常用参数');
     expect(p).toContain('### 常用范例');
     expect(p).toContain('### 特别提示');
-    expect(p).toContain('### 帮助原文逐行对照翻译');
     expect(p).toContain('本地帮助不可用');
+    // 翻译小节在功能小节之前
+    expect(p.indexOf('### 帮助原文逐行对照翻译')).toBeLessThan(p.indexOf('### 功能'));
   });
 
   it('按指定语言输出', () => {

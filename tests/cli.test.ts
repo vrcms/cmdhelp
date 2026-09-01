@@ -117,16 +117,16 @@ describe('run', () => {
     readCacheMock.mockReturnValue(null);
     fetchHelpMock.mockResolvedValue('RM(1) manual');
     completeMock.mockResolvedValue(
-      '### 功能\n删除文件\n' +
-        '### 常用范例\n示例\n' +
-        '### 帮助原文逐行对照翻译\nRM(1) manual\n删除文件手册（第 1 行）',
+      '### 帮助原文逐行对照翻译\nRM(1) manual\n删除文件手册\n' +
+        '### 功能\n删除文件\n' +
+        '### 常用范例\n示例',
     );
     const [lines, spy, errSpy] = capture('ERR:');
     const code = await run(['rm', '-rf', '/']);
     expect(code).toBe(0);
     const out = lines.join('\n');
     expect(out).toContain('### 功能\n删除文件');
-    expect(out).toContain('删除文件手册（第 1 行）');
+    expect(out).toContain('删除文件手册');
     expect(out).not.toContain('────────'); // 不再有分隔线，也不再单独展示原版帮助
     expect(fetchHelpMock).toHaveBeenCalledWith('rm');
     expect(writeCacheMock).toHaveBeenCalledWith(
@@ -160,7 +160,7 @@ describe('run', () => {
     readCacheMock.mockReturnValue({
       ...CACHED,
       changed: true,
-      explanation: '### 功能\n新解释\n' + '### 帮助原文逐行对照翻译\nRM(1) manual\n新翻译',
+      explanation: '### 帮助原文逐行对照翻译\nRM(1) manual\n新翻译\n### 功能\n新解释',
     });
     const [lines, spy, errSpy] = capture('ERR:');
     const code = await run(['rm']);
@@ -563,7 +563,7 @@ describe('run', () => {
     loadConfigMock.mockReturnValue(CONFIG);
     readCacheMock.mockReturnValue({ ...CACHED, explanation: '### 功能\n旧版内容' });
     fetchHelpMock.mockResolvedValue('RM(1) manual');
-    completeMock.mockResolvedValue('### 功能\n新版内容\n' + '### 帮助原文逐行对照翻译\nRM(1) manual\n翻译');
+    completeMock.mockResolvedValue('### 帮助原文逐行对照翻译\nRM(1) manual\n翻译\n### 功能\n新版内容');
     const [lines, spy, errSpy] = capture('ERR:');
     const code = await run(['rm']);
     expect(code).toBe(0);
