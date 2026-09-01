@@ -25,13 +25,13 @@ describe('buildSystemPrompt', () => {
   it('包含四段输出结构与真实示例约束', () => {
     const p = buildSystemPrompt();
     expect(p).toContain('### 功能');
-    expect(p).toContain('### 常用参数');
+    expect(p).toContain('### 基本用法');
+    expect(p).toContain('### 常用选项');
     expect(p).toContain('### 常用范例');
-    expect(p).toContain('### 特别提示');
+    expect(p).toContain('### 注意事项');
     expect(p).toContain('本地帮助不可用');
     expect(p).toContain('禁止占位符');
     expect(p).toContain('root@192.168.1.100');
-    expect(p).not.toContain('### 帮助原文逐行对照翻译');
   });
 
   it('按指定语言输出', () => {

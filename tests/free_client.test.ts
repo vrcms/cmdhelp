@@ -52,19 +52,20 @@ describe('completeFree', () => {
     expect(setFreeChannelMock).toHaveBeenCalledWith('anon');
   });
 
-  it('两通道均 429：抛错；已记录 public 时无需写回', async () => {
+  it('两通道均 429：抛错；已记录 anon（默认）时无需写回', async () => {
+    getFreeChannelMock.mockReturnValue('anon');
     completeMock.mockRejectedValue(fail(429));
     await expect(completeFree(config, messages)).rejects.toMatchObject({ status: 429 });
     expect(completeMock).toHaveBeenCalledTimes(2);
     expect(setFreeChannelMock).not.toHaveBeenCalled();
   });
 
-  it('记录为 anon 且两通道均 429：抛错并回退写回 public', async () => {
-    getFreeChannelMock.mockReturnValue('anon');
+  it('记录为 public 且两通道均 429：抛错并回退写回 anon', async () => {
+    getFreeChannelMock.mockReturnValue('public');
     completeMock.mockRejectedValue(fail(429));
     await expect(completeFree(config, messages)).rejects.toMatchObject({ status: 429 });
     expect(completeMock).toHaveBeenCalledTimes(2);
-    expect(setFreeChannelMock).toHaveBeenCalledWith('public');
+    expect(setFreeChannelMock).toHaveBeenCalledWith('anon');
   });
 
   it('上次通道为 anon 时优先走 anon', async () => {

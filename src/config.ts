@@ -91,7 +91,7 @@ export function setMode(mode: 'free' | 'custom'): void {
 }
 
 export function getFreeChannel(): 'public' | 'anon' {
-  return fileConfig().free_channel === 'anon' ? 'anon' : 'public';
+  return fileConfig().free_channel === 'public' ? 'public' : 'anon';
 }
 
 export function setFreeChannel(channel: 'public' | 'anon'): void {

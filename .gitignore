@@ -41,3 +41,5 @@ Thumbs.db
 .vscode/
 *.swp
 *.tmp
+# opencode 源码（仅本地参考，不提交）
+opencode-src/

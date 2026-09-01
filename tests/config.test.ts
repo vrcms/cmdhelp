@@ -90,11 +90,11 @@ describe('getMode / setMode', () => {
     expect(parsed).toMatchObject({ base_url: 'http://x/v1', model: 'm', mode: 'free' });
   });
 
-  it('免费通道默认 public', () => {
+  it('免费通道默认 anon（与 opencode 桌面端一致）', () => {
     readMock.mockImplementation(() => {
       throw new Error('ENOENT');
     });
-    expect(getFreeChannel()).toBe('public');
+    expect(getFreeChannel()).toBe('anon');
   });
 
   it('免费通道读取自由通道记录', () => {
