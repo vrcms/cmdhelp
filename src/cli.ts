@@ -429,11 +429,13 @@ async function runInteractiveLoop(
       continue;
     }
 
+    // 上下文防爆炸：追问时若问题含具体参数（如 -p），只带该参数的原文片段而非全文，节省 token
+    const helpSnippet = extractHelpSnippet(help, input);
     const followUp: ChatMessage[] = [
       ...messages,
       {
         role: 'user' as const,
-        content: `用户追问：${input}\n请基于上面的【本地帮助】回答。若用户询问某参数的原文，请直接引用帮助中该参数对应的原始英文段落（保持原样）并给出中文解释。`,
+        content: `用户追问：${input}\n${helpSnippet ? `相关帮助原文片段：\n${helpSnippet}\n` : ''}请直接回答用户问题，给出可直接运行的命令（IP/端口用用户给的真实值，不要占位符）。若问原文则引用片段并翻译。`,
       },
     ];
     const stopAi = startSpinner('正在思考…');
@@ -454,6 +456,20 @@ async function runInteractiveLoop(
   }
   rl.close();
   process.stdout.write('已退出交互。\n');
+}
+
+function extractHelpSnippet(help: string | null, query: string): string | null {
+  if (!help) return null;
+  // 若追问含 -x 形式参数，提取该参数段落（前后各 8 行），否则返回 null 让模型用完整上下文
+  const paramMatch = query.match(/(^|\s)(-\w)\b/);
+  if (!paramMatch) return null;
+  const param = paramMatch[2];
+  const lines = help.split('\n');
+  const idx = lines.findIndex((l) => l.includes(param));
+  if (idx === -1) return null;
+  const start = Math.max(0, idx - 2);
+  const end = Math.min(lines.length, idx + 10);
+  return lines.slice(start, end).join('\n');
 }
 
 function truncateHelp(help: string): string {
