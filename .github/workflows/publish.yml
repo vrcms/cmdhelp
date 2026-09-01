@@ -18,12 +18,25 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org/
       - run: npm ci
+      - name: Check if version already published
+        id: check
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "Checking cmdhelp@$VERSION on npm..."
+          if npm view "cmdhelp@$VERSION" version --json 2>/dev/null | grep -q "$VERSION"; then
+            echo "already_published=true" >> $GITHUB_OUTPUT
+            echo "Version $VERSION already published, skipping publish."
+          else
+            echo "already_published=false" >> $GITHUB_OUTPUT
+            echo "Version $VERSION not yet published, will publish."
+          fi
       - name: OIDC publish (provenance)
         id: oidc
+        if: steps.check.outputs.already_published == 'false'
         continue-on-error: true
         run: npm publish --access public --provenance
       - name: Token fallback publish
-        if: ${{ steps.oidc.outcome == 'failure' }}
+        if: ${{ steps.check.outputs.already_published == 'false' && steps.oidc.outcome == 'failure' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public
