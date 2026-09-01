@@ -17,6 +17,7 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org/
+      - run: npm ci
       - name: OIDC publish (provenance)
         continue-on-error: true
         run: npm publish --access public --provenance
