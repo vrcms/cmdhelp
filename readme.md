@@ -33,6 +33,8 @@ cmdhelp setup            # 重新配置 AI
 cmdhelp free on          # 使用免费模型
 cmdhelp free off         # 使用自己配置的模型
 cmdhelp lang en          # 切换为英文
+cmdhelp clear ssh        # 清除某个命令的缓存
+cmdhelp clear            # 清空全部缓存
 ```
 
 ## 怎么用
@@ -62,7 +64,7 @@ cmdhelp --version        # 查看版本
 首次运行选“免费模型”即可，不用自己申请 key。想用自己的 OpenAI 兼容接口或本地 Ollama，也可在 `cmdhelp setup` 中配置。
 
 **第二次查询很快？**
-会缓存上次的结果，之后打开更快。若想清理，删除 `~/.cmdhelp/cache` 目录即可。
+会缓存上次的结果，之后打开更快。若想清理，删除 `~/.cmdhelp/cache` 目录即可，或用 `cmdhelp clear <命令>` / `cmdhelp clear` 单独清除缓存。
 
 **必须用 npx cmdhelp 才能用吗？**
 `npx cmdhelp` 是临时运行，不会注册全局命令，所以 `cmdhelp xxx` 会提示 command not found。想直接输入 `cmdhelp`，全局安装一次即可：`npm i -g cmdhelp`。

@@ -7,7 +7,7 @@ import { VERSION } from './version.js';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { complete, type AiError, type CompleteOptions } from './ai_client.js';
-import { cacheKey, hashHelp, readCache, writeCache } from './cache.js';
+import { cacheKey, clearCache, hashHelp, readCache, writeCache } from './cache.js';
 import {
   FREE_PRESET,
   PRESETS,
@@ -86,6 +86,9 @@ export async function run(argv: string[]): Promise<number> {
     await refresh(command);
     return EXIT_OK;
   }
+  if (first === 'clear' || first === '-clear' || first === '--clear') {
+    return handleClear(argv.slice(1));
+  }
 
   const raw = argv.join(' ');
   // 后台检查更新（24h 一次，npx 场景仅提示，全局安装会后台自动更新）
@@ -163,6 +166,29 @@ function handleFree(args: string[]): number {
   }
   process.stderr.write('用法：cmdhelp free on | off （开启/关闭免费模式）\n');
   return EXIT_BAD_INPUT;
+}
+
+function handleClear(args: string[]): number {
+  const arg = args.join(' ').trim();
+  if (!arg) {
+    const removed = clearCache();
+    process.stdout.write(
+      removed > 0 ? `已清除全部缓存（${removed} 条）。\n` : '缓存目录为空，无需清理。\n',
+    );
+    return EXIT_OK;
+  }
+  const command = extractCommand(arg);
+  if (!command) {
+    process.stderr.write(`错误："${arg}" 不是有效的命令名（仅限字母/数字/._-，且不能以 - 开头）。\n`);
+    return EXIT_BAD_INPUT;
+  }
+  const removed = clearCache(command);
+  process.stdout.write(
+    removed > 0
+      ? `已清除 ${command} 的缓存（${removed} 条，含全部语言/模式）。\n`
+      : `没有找到 ${command} 的缓存（可能尚未查询过）。\n`,
+  );
+  return EXIT_OK;
 }
 function isNaturalLanguageQuery(raw: string): boolean {
   const t = raw.trim();
@@ -360,6 +386,7 @@ async function printUsage(): Promise<void> {
       cmdhelp setup                 配置自己的 AI 模型
       cmdhelp lang <代码>           设置解释语言（默认 cn，支持 en/ja/fr/ru 等）
       cmdhelp lang                  查看当前语言
+      cmdhelp clear [命令]          清除缓存（例：cmdhelp clear ssh；不带参数清空全部）
 示例：cmdhelp rm
       cmdhelp 如何列目录
       cmdhelp how to list files

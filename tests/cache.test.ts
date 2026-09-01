@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cacheKey, hashHelp, readCache, writeCache, type CacheEntry } from '../src/cache.js';
+import { cacheKey, clearCache, hashHelp, readCache, writeCache, type CacheEntry } from '../src/cache.js';
 
 let tempDir: string;
 
@@ -63,5 +63,32 @@ describe('cache', () => {
 
     writeFileSync(join(tempDir, 'bad__cn__free.json'), '{"help":"x"}', 'utf8');
     expect(readCache('bad__cn__free')).toBeNull();
+  });
+
+  it('clearCache(命令) 仅删除该命令所有语言/模式缓存，保留其他命令', () => {
+    writeCache(entry({ command: 'ssh', lang: 'cn', mode: 'free' }));
+    writeCache(entry({ command: 'ssh', lang: 'en', mode: 'free' }));
+    writeCache(entry({ command: 'sshs', lang: 'cn', mode: 'free' }));
+    writeCache(entry({ command: 'ls', lang: 'cn', mode: 'free' }));
+    expect(clearCache('ssh')).toBe(2);
+    expect(readCache('ssh__cn__free')).toBeNull();
+    expect(readCache('ssh__en__free')).toBeNull();
+    expect(readCache('sshs__cn__free')).not.toBeNull();
+    expect(readCache('ls__cn__free')).not.toBeNull();
+  });
+
+  it('clearCache() 不带参数清空整个目录', () => {
+    writeCache(entry({ command: 'ssh', lang: 'cn', mode: 'free' }));
+    writeCache(entry({ command: 'ls', lang: 'cn', mode: 'free' }));
+    expect(clearCache()).toBe(2);
+    expect(readCache('ssh__cn__free')).toBeNull();
+    expect(readCache('ls__cn__free')).toBeNull();
+  });
+
+  it('clearCache 对不存在目录/无匹配返回 0', () => {
+    expect(clearCache('nope')).toBe(0);
+    vi.stubEnv('CMDHELP_CACHE_DIR', join(tempDir, 'missing'));
+    expect(clearCache()).toBe(0);
+    vi.unstubAllEnvs();
   });
 });

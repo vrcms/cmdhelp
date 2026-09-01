@@ -31,6 +31,7 @@ vi.mock('../src/cache.js', async () => {
     ...actual,
     readCache: vi.fn(),
     writeCache: vi.fn(),
+    clearCache: vi.fn(),
   };
 });
 vi.mock('node:child_process', async () => {
@@ -42,7 +43,7 @@ import { getLang, getMode, loadConfig, setLang, setMode } from '../src/config.js
 import { fetchHelp } from '../src/help_source.js';
 import { complete } from '../src/ai_client.js';
 import { completeFree } from '../src/free_client.js';
-import { readCache, writeCache, hashHelp } from '../src/cache.js';
+import { readCache, writeCache, clearCache, hashHelp } from '../src/cache.js';
 import { spawn } from 'node:child_process';
 import { run } from '../src/cli.js';
 
@@ -56,6 +57,7 @@ const getModeMock = vi.mocked(getMode);
 const setModeMock = vi.mocked(setMode);
 const readCacheMock = vi.mocked(readCache);
 const writeCacheMock = vi.mocked(writeCache);
+const clearCacheMock = vi.mocked(clearCache);
 const spawnMock = vi.mocked(spawn);
 
 const CONFIG = { base_url: 'http://127.0.0.1:11434/v1', api_key: '', model: 'llama3.1' };const CACHED = {
@@ -97,6 +99,7 @@ describe('run', () => {
     setModeMock.mockReset();
     readCacheMock.mockReset();
     writeCacheMock.mockReset();
+    clearCacheMock.mockReset();
     spawnMock.mockReset();
   });
 
@@ -414,6 +417,60 @@ describe('run', () => {
     expect(code).toBe(2);
     expect(lines.join('\n')).toContain('free on | off');
     expect(setModeMock).not.toHaveBeenCalled();
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('clear 指定命令 → 删除该命令全部语言/模式缓存', async () => {
+    clearCacheMock.mockReturnValue(2);
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['clear', 'ssh']);
+    expect(code).toBe(0);
+    expect(clearCacheMock).toHaveBeenCalledWith('ssh');
+    expect(lines.join('\n')).toContain('已清除 ssh 的缓存（2 条');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('-clear 别名同样可用（用户提议的写法）', async () => {
+    clearCacheMock.mockReturnValue(1);
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['-clear', 'ssh']);
+    expect(code).toBe(0);
+    expect(clearCacheMock).toHaveBeenCalledWith('ssh');
+    expect(lines.join('\n')).toContain('已清除 ssh 的缓存');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('clear 不带参数 → 清空全部缓存', async () => {
+    clearCacheMock.mockReturnValue(5);
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['clear']);
+    expect(code).toBe(0);
+    expect(clearCacheMock).toHaveBeenCalledWith();
+    expect(lines.join('\n')).toContain('已清除全部缓存（5 条）');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('clear 目标命令无缓存 → 友好提示', async () => {
+    clearCacheMock.mockReturnValue(0);
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['clear', 'nope']);
+    expect(code).toBe(0);
+    expect(lines.join('\n')).toContain('没有找到 nope 的缓存');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('clear 非法命令名 → 报错并退出 2', async () => {
+    clearCacheMock.mockReturnValue(0);
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['clear', '-rf', '/']);
+    expect(code).toBe(2);
+    expect(lines.join('\n')).toContain('不是有效的命令名');
+    expect(clearCacheMock).not.toHaveBeenCalled();
     spy.mockRestore();
     errSpy.mockRestore();
   });

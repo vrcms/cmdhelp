@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -46,4 +46,24 @@ export function writeCache(entry: CacheEntry): void {
   mkdirSync(cacheDir(), { recursive: true });
   const file = cacheFile(cacheKey(entry.command, entry.lang, entry.mode));
   writeFileSync(file, `${JSON.stringify(entry, null, 2)}\n`, { mode: 0o600 });
+}
+
+export function clearCache(command?: string): number {
+  // 有命令：删除该命令（任意语言/模式）的全部缓存；无命令：清空整个缓存目录
+  let removed = 0;
+  try {
+    const dir = cacheDir();
+    const files = readdirSync(dir);
+    const prefix = command ? `${command}__` : '';
+    for (const name of files) {
+      if (!name.endsWith('.json')) continue;
+      if (!command || name.startsWith(prefix)) {
+        rmSync(join(dir, name), { force: true });
+        removed += 1;
+      }
+    }
+  } catch {
+    // 目录不存在即视为 0 条
+  }
+  return removed;
 }
