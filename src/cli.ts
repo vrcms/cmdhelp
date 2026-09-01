@@ -275,28 +275,14 @@ async function explain(
   ];
 
   const stopAi = startSpinner('正在生成 AI 通俗解释…');
+  let explanation: string;
   try {
-    const explanation = aiOpts.freeTier
+    explanation = aiOpts.freeTier
       ? await completeFree(config, messages)
       : await complete(config, messages, aiOpts);
-    writeCache({
-      command,
-      lang,
-      mode: getMode(),
-      help,
-      explanation,
-      helpHash: hashHelp(help),
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      lastCheckedAt: null,
-      changed: false,
-    });
-    printResult(help, explanation);
-    if (shouldEnterInteractive()) {
-      await runInteractiveLoop(command, help, explanation, config, lang, aiOpts.freeTier);
-    }
-    return EXIT_OK;
+    stopAi();
   } catch (err) {
+    stopAi();
     // 429 限流时，若有旧缓存的总结，优先展示缓存（比只展示英文 help 更有用）
     const fallbackCache = readCache(cacheKey(command, lang, getMode()));
     if (fallbackCache && fallbackCache.explanation) {
@@ -320,9 +306,25 @@ async function explain(
     }
     process.stderr.write(`错误：AI 调用失败：${(err as Error).message}\n`);
     return EXIT_FAIL;
-  } finally {
-    stopAi();
   }
+
+  writeCache({
+    command,
+    lang,
+    mode: getMode(),
+    help,
+    explanation,
+    helpHash: hashHelp(help),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    lastCheckedAt: null,
+    changed: false,
+  });
+  printResult(help, explanation);
+  if (shouldEnterInteractive()) {
+    await runInteractiveLoop(command, help, explanation, config, lang, aiOpts.freeTier);
+  }
+  return EXIT_OK;
 }
 
 async function refresh(command: string): Promise<void> {
