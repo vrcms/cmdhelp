@@ -36,6 +36,7 @@ const EXIT_OK = 0;
 const EXIT_FAIL = 1;
 const EXIT_BAD_INPUT = 2;
 const EXIT_NO_CONFIG = 3;
+const DISPLAY_HELP_MAX_LINES = 60;
 
 export async function run(argv: string[]): Promise<number> {
   const first = argv[0];
@@ -246,7 +247,7 @@ async function explain(
     return EXIT_OK;
   } catch (err) {
     if (help) {
-      console.log(help);
+      console.log(truncateHelp(help));
       console.log(dimLine(separator()));
       process.stderr.write('AI 解释失败，以上为本地帮助原文；\n');
     }
@@ -299,7 +300,8 @@ async function refresh(command: string): Promise<void> {
 
 function printResult(help: string | null, explanation: string | null): void {
   if (help) {
-    console.log(help);
+    const display = truncateHelp(help);
+    console.log(display);
     console.log(dimLine(separator()));
   } else {
     console.log('注：本地帮助不可用，以下基于通用知识，可能与当前系统版本有差异。\n');
@@ -307,6 +309,13 @@ function printResult(help: string | null, explanation: string | null): void {
   if (explanation) {
     console.log(formatExplanation(explanation));
   }
+}
+
+function truncateHelp(help: string): string {
+  const lines = help.split('\n');
+  if (lines.length <= DISPLAY_HELP_MAX_LINES) return help;
+  const kept = lines.slice(0, DISPLAY_HELP_MAX_LINES).join('\n');
+  return `${kept}\n… 共 ${lines.length} 行，此处仅显示前 ${DISPLAY_HELP_MAX_LINES} 行`;
 }
 
 function spawnRefresh(command: string): void {
@@ -330,6 +339,14 @@ function isGarbledHelp(text: string | null): boolean {
   return false;
 }
 
+function isNpxRun(): boolean {
+  const exec = process.argv[1] ?? '';
+  if (exec.includes('_npx') || exec.includes('.npm')) return true;
+  const npmExec = process.env.npm_execpath ?? '';
+  if (npmExec.includes('npx')) return true;
+  return false;
+}
+
 function separator(): string {
   const width = process.stdout.columns && process.stdout.columns > 20 ? process.stdout.columns : 60;
   return '─'.repeat(width);
@@ -350,6 +367,7 @@ async function printUsage(): Promise<void> {
 说明：命令查询只读本地 man/help/Get-Help，绝不执行目标命令；自然语言提问直接走 AI。
   免费模式受限流影响，查不到时可 setup 配置其他服务。
   查询结果会缓存，再次运行时秒出旧结果并后台校验帮助是否有变化。
+  当前通过 npx 运行；想直接用 cmdhelp 命令（免 npx 前缀），可全局安装：npm i -g cmdhelp
   请支持opencode，仅需10$。`);
 }
 
@@ -403,6 +421,12 @@ async function runSetup(): Promise<boolean> {
     }
     saveConfig({ base_url, api_key, model });
     process.stdout.write(`已写入 ${configPath()}。现在可以查询命令了，例如：cmdhelp git\n`);
+    if (isNpxRun()) {
+      process.stdout.write(
+        '提示：当前通过 npx 临时运行，直接输入 cmdhelp 会提示 command not found。\n',
+      );
+      process.stdout.write('如需全局使用，请执行：npm i -g cmdhelp\n');
+    }
     return true;
   } finally {
     rl.close();

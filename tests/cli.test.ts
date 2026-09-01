@@ -445,6 +445,54 @@ describe('run', () => {
     errSpy.mockRestore();
   });
 
+  it('帮助原文超过 60 行时显示层截断并提示剩余行数', async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    readCacheMock.mockReturnValue(null);
+    const longHelp = Array.from({ length: 80 }, (_, i) => `line ${i + 1}`).join('\n');
+    fetchHelpMock.mockResolvedValue(longHelp);
+    completeMock.mockResolvedValue('### 功能\n删除文件');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['rm']);
+    expect(code).toBe(0);
+    const out = lines.join('\n');
+    expect(out).toContain('line 1');
+    expect(out).toContain('line 60');
+    expect(out).not.toContain('line 61');
+    expect(out).toContain('此处仅显示前 60 行');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('帮助原文 60 行以内完整显示不截断', async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    readCacheMock.mockReturnValue(null);
+    const shortHelp = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join('\n');
+    fetchHelpMock.mockResolvedValue(shortHelp);
+    completeMock.mockResolvedValue('### 功能\n删除文件');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['rm']);
+    expect(code).toBe(0);
+    const out = lines.join('\n');
+    expect(out).toContain('line 30');
+    expect(out).not.toContain('此处仅显示前 60 行');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('AI 解释失败且帮助超长时，原文同样截断', async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    fetchHelpMock.mockResolvedValue(Array.from({ length: 80 }, (_, i) => `line ${i + 1}`).join('\n'));
+    completeMock.mockRejectedValue(new Error('boom'));
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['rm']);
+    expect(code).toBe(1);
+    const out = lines.join('\n');
+    expect(out).toContain('此处仅显示前 60 行');
+    expect(out).not.toContain('line 80');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
   it('自然语言提问（中文）直接走 AI，不查本地帮助', async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     readCacheMock.mockReturnValue(null);
