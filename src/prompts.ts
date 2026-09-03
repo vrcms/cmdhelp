@@ -52,11 +52,14 @@ export function buildSystemPrompt(lang = 'cn'): string {
 - 若本地帮助不可用，则基于通用知识回答，并在输出末尾另起一行注明：注：以下基于通用知识，可能与当前系统版本有差异。`;
 }
 
-export function buildUserPrompt(command: string, helpText: string | null): string {
+export function buildUserPrompt(command: string, helpText: string | null, sourceNote?: string | null): string {
+  const head = `命令名：${command}`;
   if (!helpText) {
-    return `命令名：${command}\n【本地帮助不可用】请基于通用知识回答。`;
+    const tail = sourceNote ? `\n${sourceNote}\n请基于通用知识回答所选程序。` : '\n请基于通用知识回答。';
+    return `${head}\n【本地帮助不可用】${tail}`;
   }
-  return `命令名：${command}\n【本地帮助】\n${helpText}\n\n请依据上述本地帮助生成解释。`;
+  const note = sourceNote ? `\n${sourceNote}\n` : '\n';
+  return `${head}\n【本地帮助】\n${helpText}\n${note}请依据上述本地帮助生成解释。`;
 }
 
 export function buildQuestionSystemPrompt(lang = 'cn'): string {

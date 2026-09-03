@@ -38,13 +38,19 @@ export interface ChatContext {
   history: ChatMessage[]; // 仅存 user/assistant 来回，不含 system/help
 }
 
-export function createContext(command: string, help: string | null, lang: string, initialExplanation: string): ChatContext {
+export function createContext(
+  command: string,
+  help: string | null,
+  lang: string,
+  initialExplanation: string,
+  sourceNote?: string | null,
+): ChatContext {
   return {
     command,
     help,
     lang,
     systemPrompt: buildSystemPrompt(lang),
-    helpPrompt: buildUserPrompt(command, help),
+    helpPrompt: buildUserPrompt(command, help, sourceNote ?? null),
     history: [{ role: 'assistant', content: initialExplanation }],
   };
 }

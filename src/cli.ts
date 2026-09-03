@@ -24,14 +24,22 @@ import { startSpinner } from './feedback.js';
 import { completeFree } from './free_client.js';
 import { createContext, buildMessages, pushTurn } from './context.js';
 import { dimLine, formatExplanation } from './format.js';
-import { fetchHelp } from './help_source.js';
+import {
+  buildSourceNote,
+  fetchHelp,
+  fetchHelpDetailed,
+  fetchVersionInfo,
+  resolveWindowsCommand,
+  validateExecutablePath,
+  type CommandCandidate,
+} from './help_source.js';
 import {
   buildQuestionPrompt,
   buildQuestionSystemPrompt,
   buildSystemPrompt,
   buildUserPrompt,
 } from './prompts.js';
-import { extractCommand } from './tokenize.js';
+import { extractCommand, extractTarget } from './tokenize.js';
 
 const EXIT_OK = 0;
 const EXIT_FAIL = 1;
@@ -101,50 +109,103 @@ export async function run(argv: string[]): Promise<number> {
     return answerQuestion(raw, ai.config, { freeTier: ai.freeTier });
   }
 
-  const command = extractCommand(raw);
-  if (!command) {
-    process.stderr.write(`错误："${raw}" 不是有效的命令名（仅限字母/数字/._-，且不能以 - 开头）。\n`);
+  const target = extractTarget(argv);
+  if (!target) {
+    process.stderr.write(`错误："${raw}" 不是有效的命令名（仅限字母/数字/._-，且不能以 - 开头；也可用完整路径如 "C:\\tools\\agy.exe"）。\n`);
     return EXIT_BAD_INPUT;
   }
-
-  const cached = readCache(cacheKey(command, getLang(), getMode()));
-  if (cached) {
-    if (isGarbledHelp(cached.help)) {
-      // 旧缓存因 GBK 解码错误导致乱码，视为无效，直接走重新生成
-      process.stderr.write('（检测到历史缓存乱码，已自动清理并重新生成…）\n');
-    } else if (cached.changed) {
-      printResult(cached.help, cached.explanation);
-      process.stderr.write('（检测到命令帮助有更新，已重新生成结果）\n');
-      writeCache({ ...cached, changed: false });
-      if (shouldEnterInteractive()) {
-        const ai = resolveAi();
-        if (ai) await runInteractiveLoop(cached.command, cached.help, cached.explanation, ai.config, cached.lang, ai.freeTier);
-      }
-      return EXIT_OK;
-    } else {
-      printResult(cached.help, cached.explanation);
-      if (cached.lastCheckedAt) {
-        const at = new Date(cached.lastCheckedAt).toLocaleString();
-        process.stderr.write(`（${at} 核查 · 命令帮助未改变，后台持续校验中…）\n`);
-      } else {
-        const at = new Date(cached.updatedAt).toLocaleString();
-        process.stderr.write(`（${at} 生成 · 后台校验中…）\n`);
-      }
-      if (shouldEnterInteractive()) {
-        const ai = resolveAi();
-        if (ai) await runInteractiveLoop(cached.command, cached.help, cached.explanation, ai.config, cached.lang, ai.freeTier);
-        return EXIT_OK;
-      }
-      spawnRefresh(command);
-      return EXIT_OK;
+  const command = target.name;
+  // 完整路径输入：先校验文件有效性（只读元数据，不执行）
+  if (target.fullPath) {
+    const check = validateExecutablePath(target.fullPath);
+    if (!check.ok) {
+      process.stderr.write(`错误：完整路径无效（${check.reason}）：${target.fullPath}\n`);
+      return EXIT_BAD_INPUT;
     }
+  }
+
+  const cacheCommand = target.fullPath || target.runHelp ? cacheKeyFor(command, target.fullPath) : command;
+  const cached = readCache(cacheKey(cacheCommand, getLang(), getMode()));
+  // Windows 重名校验：缓存里记的所选程序若已不在本机候选中（重装/换 PATH 顺序），视为失效重新生成
+  const cachedSource = cached?.source ?? null;
+  if (cached && cachedSource && process.platform === 'win32') {
+    const now = await safeResolve(command);
+    const stillThere = target.fullPath
+      ? cachedSource.toLowerCase() === target.fullPath.toLowerCase()
+      : now.some((c) => c.source.toLowerCase() === cachedSource.toLowerCase());
+    if (!stillThere) {
+      process.stderr.write('（检测到同名命令指向已变化，重新生成…）\n');
+    } else {
+      const done = await printCachedAndMaybeInteract(cached, command);
+      if (done !== null) return done;
+    }
+  } else if (cached) {
+    const done = await printCachedAndMaybeInteract(cached, command);
+    if (done !== null) return done;
   }
 
   const ai = resolveAi();
   if (!ai) {
     return handleNoConfig();
   }
-  return explain(command, ai.config, { freeTier: ai.freeTier });
+  return explain(
+    command,
+    ai.config,
+    { freeTier: ai.freeTier },
+    { runHelp: target.runHelp, pinnedPath: target.fullPath, cacheCommand },
+  );
+}
+
+async function printCachedAndMaybeInteract(
+  cached: Exclude<ReturnType<typeof readCache>, null>,
+  command: string,
+): Promise<number | null> {
+  if (isGarbledHelp(cached.help)) {
+    // 旧缓存因 GBK 解码错误导致乱码，视为无效，直接走重新生成
+    process.stderr.write('（检测到历史缓存乱码，已自动清理并重新生成…）\n');
+    return null;
+  }
+  if (cached.changed) {
+    printResult(cached.help, cached.explanation);
+    process.stderr.write('（检测到命令帮助有更新，已重新生成结果）\n');
+    writeCache({ ...cached, changed: false });
+    if (shouldEnterInteractive()) {
+      const ai = resolveAi();
+      if (ai) await runInteractiveLoop(cached.command, cached.help, cached.explanation, ai.config, cached.lang, ai.freeTier);
+    }
+    return EXIT_OK;
+  }
+  printResult(cached.help, cached.explanation);
+  if (cached.lastCheckedAt) {
+    const at = new Date(cached.lastCheckedAt).toLocaleString();
+    process.stderr.write(`（${at} 核查 · 命令帮助未改变，后台持续校验中…）\n`);
+  } else {
+    const at = new Date(cached.updatedAt).toLocaleString();
+    process.stderr.write(`（${at} 生成 · 后台校验中…）\n`);
+  }
+  if (shouldEnterInteractive()) {
+    const ai = resolveAi();
+    if (ai) await runInteractiveLoop(cached.command, cached.help, cached.explanation, ai.config, cached.lang, ai.freeTier);
+    return EXIT_OK;
+  }
+  spawnRefresh(command);
+  return EXIT_OK;
+}
+
+/** 缓存命令名：pin 路径或 /? 输出单独成键（后缀源路径 hash），避免与按名查询的缓存串味 */
+function cacheKeyFor(name: string, source: string | null): string {
+  if (!source) return name;
+  return `${name}__@${hashHelp(source.toLowerCase()).slice(0, 8)}`;
+}
+
+/** 安全版解析：失败（或被 mock）时返回空数组，不抛错 */
+async function safeResolve(command: string): Promise<CommandCandidate[]> {
+  try {
+    if (typeof resolveWindowsCommand !== 'function') return [];
+    return (await resolveWindowsCommand(command)) ?? [];
+  } catch {
+    return [];
+  }
 }
 
 function resolveAi(): { config: Config; freeTier: boolean } | null {
@@ -216,6 +277,10 @@ function handleClear(args: string[]): number {
 function isNaturalLanguageQuery(raw: string): boolean {
   const t = raw.trim();
   if (!t) return false;
+  // Windows 完整路径（如 C:\tools\agy.exe）含空格也绝不是自然语言
+  if (/^[A-Za-z]:[\\/]/.test(t) || /^["']?[A-Za-z]:[\\/]/.test(t)) return false;
+  // 显式取帮助意图（cmdhelp agy /?）：尾部的 ? 是 /? 参数，不是疑问句
+  if (/^\S+\s+(\/\?|-\?|--help|--run-help|-h|help)\s*$/.test(t)) return false;
   // 任何含中文的输入都视为自然语言（命令名仅限 ASCII）
   if (/[\u4e00-\u9fa5]/.test(t)) return true;
   // 英文疑问句
@@ -264,15 +329,45 @@ async function explain(
   command: string,
   config: Config,
   aiOpts: CompleteOptions & { freeTier?: boolean } = {},
+  helpOpts: { runHelp?: boolean; pinnedPath?: string | null; cacheCommand?: string } = {},
 ): Promise<number> {
   const lang = getLang();
   const stop = startSpinner(`正在查询本地帮助（${command}）…`);
-  const help = await fetchHelp(command);
-  stop();
+  // Windows 同名处理：pin 路径直接用；多候选二选一；单候选/失败走传统链路（行为不变）
+  let candidates: CommandCandidate[] = [];
+  let pinned: string | null = helpOpts.pinnedPath ?? null;
+  if (process.platform === 'win32' && !pinned) {
+    candidates = await safeResolve(command);
+    if (candidates.length > 1) {
+      stop();
+      pinned = await selectCandidate(command, candidates);
+      if (!pinned) return EXIT_FAIL;
+    } else if (candidates.length === 1 && helpOpts.runHelp) {
+      // 单候选 + 显式 /?：直接 pin，避免 detail 里重复解析跑两次
+      pinned = candidates[0]!.source;
+    }
+  }
+  const canDetail = typeof fetchHelpDetailed === 'function';
+  const needDetail = Boolean(pinned || helpOpts.runHelp) && canDetail;
+  const detail = needDetail
+    ? await fetchHelpDetailed(command, { pinnedPath: pinned ?? undefined, runHelp: helpOpts.runHelp })
+    : null;
+  if (!needDetail) stop();
+  const help = detail ? detail.help : await fetchHelp(command);
+  if (needDetail) stop();
+  // 单候选时也记下 source，供下次校验 PATH 是否变化；传统链路 help 不变
+  const singleSource = !pinned && candidates.length === 1 ? candidates[0]!.source : null;
+  const chosenSource = detail ? detail.chosenSource : singleSource;
+  const sourceNote = detail ? detail.sourceNote : null;
+  if (detail?.authoritative && detail.chosenSource) {
+    process.stderr.write(`（已定位到 ${detail.chosenSource}，帮助来自该程序本身）\n`);
+  } else if (detail && candidates.length > 1) {
+    process.stderr.write(`（按名查到的帮助可能属于另一个同名程序，已要求 AI 以所选程序为准）\n`);
+  }
 
   const messages: ChatMessage[] = [
     { role: 'system' as const, content: buildSystemPrompt(lang) },
-    { role: 'user' as const, content: buildUserPrompt(command, help) },
+    { role: 'user' as const, content: buildUserPrompt(command, help, sourceNote) },
   ];
 
   const stopAi = startSpinner('正在生成 AI 通俗解释…');
@@ -285,7 +380,7 @@ async function explain(
   } catch (err) {
     stopAi();
     // 429 限流时，若有旧缓存的总结，优先展示缓存（比只展示英文 help 更有用）
-    const fallbackCache = readCache(cacheKey(command, lang, getMode()));
+    const fallbackCache = readCache(cacheKey(helpOpts.cacheCommand ?? command, lang, getMode()));
     if (fallbackCache && fallbackCache.explanation) {
       process.stderr.write('（AI 额度/限流，展示上次缓存的总结）\n');
       printResult(fallbackCache.help, fallbackCache.explanation);
@@ -310,9 +405,10 @@ async function explain(
   }
 
   writeCache({
-    command,
+    command: helpOpts.cacheCommand ?? command,
     lang,
     mode: getMode(),
+    source: chosenSource,
     help,
     explanation,
     helpHash: hashHelp(help),
@@ -323,15 +419,66 @@ async function explain(
   });
   printResult(help, explanation);
   if (shouldEnterInteractive()) {
-    await runInteractiveLoop(command, help, explanation, config, lang, aiOpts.freeTier);
+    await runInteractiveLoop(command, help, explanation, config, lang, aiOpts.freeTier, sourceNote);
   }
   return EXIT_OK;
+}
+
+/** Windows 重名二选一：TTY 列出候选（含产品名/版本）让用户挑；非 TTY 默认 PATH 第一个 */
+async function selectCandidate(command: string, candidates: CommandCandidate[]): Promise<string | null> {
+  // 一次取齐版本信息，一次展示，避免多次弹窗式调用
+  try {
+    if (typeof fetchVersionInfo === 'function') {
+      const info = await fetchVersionInfo(candidates.map((c) => c.source));
+      for (const c of candidates) {
+        const v = info.get(c.source);
+        if (v) {
+          if (v.product) c.product = v.product;
+          if (v.version) c.fileVersion = v.version;
+        }
+      }
+    }
+  } catch {
+    // 版本信息拿不到不影响选择
+  }
+  const lines = candidates.map((c, i) => {
+    const extra = [c.commandType, c.product, c.fileVersion].filter(Boolean).join('，');
+    const first = i === 0 ? '（PATH 第一个，直接回车即选它）' : '';
+    return `  ${i + 1}) ${c.source}${extra ? `（${extra}）` : ''}${first}`;
+  });
+  if (!stdin.isTTY || !stdout.isTTY) {
+    process.stderr.write(
+      `（发现 ${candidates.length} 个同名命令 ${command}，非交互终端默认使用 PATH 第一个：${candidates[0]!.source}\n${lines.join('\n')}\n` +
+        `如需指定：cmdhelp "完整路径"，或交互终端运行后按序号选择）\n`,
+    );
+    return candidates[0]!.source;
+  }
+  process.stdout.write(`发现 ${candidates.length} 个同名命令 ${command}，请选择要解释的：\n${lines.join('\n')}\n`);
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    const answer = (await rl.question('请输入序号（回车默认 1，q 取消）：')).trim().toLowerCase();
+    if (!answer) return candidates[0]!.source;
+    if (answer === 'q') return null;
+    const n = Number(answer);
+    if (Number.isInteger(n) && n >= 1 && n <= candidates.length) return candidates[n - 1]!.source;
+    process.stderr.write(`无效序号，已取消（可用 cmdhelp "${candidates[0]!.source}" 直接指定）。\n`);
+    return null;
+  } catch {
+    return null;
+  } finally {
+    rl.close();
+  }
 }
 
 async function refresh(command: string): Promise<void> {
   const key = cacheKey(command, getLang(), getMode());
   const cached = readCache(key);
   if (!cached) return;
+  if (cached.source) {
+    // pin/二选一产生的缓存绑定了具体程序，后台静默不再碰目标程序，只更新核查时间
+    writeCache({ ...cached, lastCheckedAt: Date.now() });
+    return;
+  }
   const help = await fetchHelp(command);
   const hash = hashHelp(help);
   if (hash === cached.helpHash) {
@@ -390,12 +537,13 @@ async function runInteractiveLoop(
   config: Config,
   lang: string,
   freeTier?: boolean,
+  sourceNote?: string | null,
 ): Promise<void> {
   const rl = createInterface({ input: stdin, output: stdout });
   // 简易上下文管理：参考 opencode compaction/overflow
   // help 只在 helpPrompt 中出现一次（base），history 只存问答轮次，
   // 每次按 token 预算裁剪 tail，避免重复发送导致 8k 上下文溢出
-  const ctx = createContext(command, help, lang, initialExplanation);
+  const ctx = createContext(command, help, lang, initialExplanation, sourceNote ?? null);
 
   process.stdout.write(`\n关于 ${command} 还有什么想问的？（例如：-p 参数原文是什么样的）直接回车退出。\n`);
   while (true) {
@@ -481,7 +629,9 @@ function separator(): string {
 async function printUsage(): Promise<void> {
   console.log(`cmdhelp v${VERSION} — 命令行智能助手
 用法：cmdhelp <命令名>              查询单个命令（例：cmdhelp rm）
-      cmdhelp <自然语言提问>        直接问 AI（例：cmdhelp 如何列目录）
+       cmdhelp <命令名> /?            显式跑所选程序的 /? 取帮助（Windows 重名时最准，默认不用）
+       cmdhelp "<完整路径>"           按完整路径查询（例：cmdhelp "C:\\tools\\agy.exe"）
+       cmdhelp <自然语言提问>        直接问 AI（例：cmdhelp 如何列目录）
       cmdhelp free on|off           开启/关闭免费模式（big-pickle，无需配置）
       cmdhelp setup                 配置自己的 AI 模型
       cmdhelp lang <代码>           设置解释语言（默认 cn，支持 en/ja/fr/ru 等）
@@ -493,6 +643,7 @@ async function printUsage(): Promise<void> {
 
 说明：查询会给出 AI 总结（功能/常用参数/常用范例/特别提示），支持交互式追问（基于完整帮助原文，防上下文爆炸）。
   追问时会保留完整帮助上下文，例如：cmdhelp ssh 后可继续问“-p 参数原文是什么样的”。
+  Windows 下同名命令（如 agy 有新老两个）会自动列出候选让你选；只有当你明确写 /? 时才会执行所选程序取帮助。
   免费模式受限流影响，查不到时可 setup 配置其他服务。
   查询结果会缓存，再次运行时秒出旧结果并后台校验帮助是否有变化。
   当前通过 npx 运行；想直接用 cmdhelp 命令（免 npx 前缀），可全局安装：npm i -g cmdhelp

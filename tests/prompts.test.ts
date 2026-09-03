@@ -54,6 +54,17 @@ describe('buildUserPrompt', () => {
     expect(p).toContain('命令名：foo');
     expect(p).toContain('【本地帮助不可用】');
   });
+
+  it('带命令解析备注时追加到提示词', () => {
+    const p = buildUserPrompt('agy', 'OLD HELP', '【命令解析】本次所选');
+    expect(p).toContain('OLD HELP');
+    expect(p).toContain('【命令解析】本次所选');
+  });
+
+  it('无备注时行为与旧版一致', () => {
+    const p = buildUserPrompt('rm', 'RM(1) manual');
+    expect(p).not.toContain('【命令解析】');
+  });
 });
 
 describe('buildQuestionPrompt', () => {

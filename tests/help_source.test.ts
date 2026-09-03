@@ -6,18 +6,30 @@ vi.mock('node:child_process', () => ({
 
 import type { ChildProcess } from 'node:child_process';
 import { spawn } from 'node:child_process';
-import { fetchHelp } from '../src/help_source.js';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  buildSourceNote,
+  fetchHelp,
+  fetchHelpDetailed,
+  resolveWindowsCommand,
+  runExeHelp,
+  validateExecutablePath,
+} from '../src/help_source.js';
 
 const spawnMock = vi.mocked(spawn);
 
 interface FakeChild {
   stdout: { on: (ev: string, cb: (chunk: Buffer) => void) => void };
+  stderr: { on: (ev: string, cb: (chunk: Buffer) => void) => void };
   on: (ev: string, cb: (exit: number | null, signal: string | null) => void) => void;
   kill: ReturnType<typeof vi.fn> & { mock: unknown };
 }
 
 function makeChild(opts: {
   data?: string[];
+  errData?: string[];
   exitCode?: number | null;
   signal?: string | null;
   emitError?: boolean;
@@ -28,6 +40,13 @@ function makeChild(opts: {
       on: (_ev: string, cb: (chunk: Buffer) => void) => {
         if (opts.data) {
           for (const d of opts.data) cb(Buffer.from(d, 'utf8'));
+        }
+      },
+    },
+    stderr: {
+      on: (_ev: string, cb: (chunk: Buffer) => void) => {
+        if (opts.errData) {
+          for (const d of opts.errData) cb(Buffer.from(d, 'utf8'));
         }
       },
     },
@@ -176,5 +195,97 @@ describe('fetchHelp (Windows)', () => {
     expect(help).not.toBeNull();
     expect(help!.startsWith(chunk)).toBe(true);
     expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('resolveWindowsCommand', () => {
+  beforeEach(() => {
+    setPlatform('win32');
+    spawnMock.mockReset();
+  });
+
+  it('合并 where 与 Get-Command 并按路径去重', async () => {
+    spawnMock.mockReturnValueOnce(
+      makeChild({ data: ['C:\\old\\agy.exe\nC:\\new\\agy.exe\n'], exitCode: 0 }),
+    );
+    spawnMock.mockReturnValueOnce(
+      makeChild({ data: ['Application|C:\\NEW\\agy.exe\nAlias|\n'], exitCode: 0 }),
+    );
+    const list = await resolveWindowsCommand('agy');
+    expect(list.map((c) => c.source)).toEqual(['C:\\old\\agy.exe', 'C:\\new\\agy.exe']);
+    expect(list[0]!.commandType).toBe('Application');
+  });
+
+  it('非 Windows 直接返回空数组且不 spawn', async () => {
+    setPlatform('linux');
+    expect(await resolveWindowsCommand('agy')).toEqual([]);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('同名定位 helpers', () => {
+  beforeEach(() => {
+    setPlatform('win32');
+    spawnMock.mockReset();
+  });
+
+  it('buildSourceNote：单候选无选定时返回 null，多候选含警告', () => {
+    expect(buildSourceNote('agy', [{ source: 'C:\\a\\agy.exe', commandType: 'Application' }], null, false)).toBeNull();
+    const note = buildSourceNote(
+      'agy',
+      [
+        { source: 'C:\\old\\agy.exe', commandType: 'Application' },
+        { source: 'C:\\new\\agy.exe', commandType: 'Application' },
+      ],
+      'C:\\new\\agy.exe',
+      false,
+    )!;
+    expect(note).toContain('2 个同名命令');
+    expect(note).toContain('本次所选');
+    expect(note).toContain('可能属于另一个同名程序');
+  });
+
+  it('validateExecutablePath：不存在的文件不通过', () => {
+    expect(validateExecutablePath('C:\\definitely\\not\\here\\agy.exe').ok).toBe(false);
+  });
+
+  it('fetchHelpDetailed pin 脚本：读文件即权威帮助，不 spawn', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cmdhelp-test-'));
+    const bat = join(dir, 'agy.bat');
+    writeFileSync(bat, '@echo off\nantigravity --help\n', 'utf8');
+    const detail = await fetchHelpDetailed('agy', { pinnedPath: bat });
+    expect(detail.help).toContain('antigravity');
+    expect(detail.authoritative).toBe(true);
+    expect(detail.chosenSource).toBe(bat);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('runExeHelp：两种帮助约定都试并择优（长者胜），cwd 隔离且 PATH 收敛', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cmdhelp-test-'));
+    const exe = join(dir, 'agy.exe');
+    writeFileSync(exe, 'MZ-fake', 'utf8');
+    spawnMock.mockReturnValueOnce(makeChild({ data: ['ANTIGRAVITY v1\nUsage: agy --help\n'], exitCode: 0 }));
+    spawnMock.mockReturnValueOnce(makeChild({ errData: ['Error: unexpected argument\n'], exitCode: 2 }));
+    const out = await runExeHelp(exe);
+    expect(out).toContain('ANTIGRAVITY');
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    const [file, args, opts] = spawnMock.mock.calls[0] as unknown as [string, string[], { cwd: string; env: Record<string, string> }];
+    expect(file).toBe(exe);
+    expect(args).toEqual(['--help']);
+    expect(opts.cwd).toContain('cmdhelp-');
+    expect(opts.env.PATH).toContain('System32');
+    expect(opts.env.PATH).not.toContain(dir);
+    const [, args2] = spawnMock.mock.calls[1] as unknown as [string, string[]];
+    expect(args2).toEqual(['/?']);
+  });
+
+  it('runExeHelp：stderr 输出也被合并（非零退出仍认输出）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cmdhelp-test-'));
+    const exe = join(dir, 'old.exe');
+    writeFileSync(exe, 'MZ-fake', 'utf8');
+    spawnMock.mockReturnValueOnce(makeChild({ exitCode: 0 }));
+    spawnMock.mockReturnValueOnce(makeChild({ errData: ['OLD TOOL usage: old /?\n'], exitCode: 2 }));
+    const out = await runExeHelp(exe);
+    expect(out).toContain('OLD TOOL');
   });
 });

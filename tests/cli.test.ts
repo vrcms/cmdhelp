@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../src/update.js', () => ({ spawnUpdateCheck: vi.fn() }));
 
@@ -22,7 +22,14 @@ vi.mock('../src/config.js', () => ({
   ],
 }));
 
-vi.mock('../src/help_source.js', () => ({ fetchHelp: vi.fn() }));
+vi.mock('../src/help_source.js', () => ({
+  fetchHelp: vi.fn(),
+  fetchHelpDetailed: vi.fn(),
+  resolveWindowsCommand: vi.fn(),
+  fetchVersionInfo: vi.fn(),
+  validateExecutablePath: vi.fn(),
+  buildSourceNote: vi.fn(() => null),
+}));
 vi.mock('../src/ai_client.js', () => ({ complete: vi.fn() }));
 vi.mock('../src/free_client.js', () => ({ completeFree: vi.fn() }));
 vi.mock('../src/cache.js', async () => {
@@ -40,7 +47,13 @@ vi.mock('node:child_process', async () => {
 });
 
 import { getLang, getMode, loadConfig, setLang, setMode } from '../src/config.js';
-import { fetchHelp } from '../src/help_source.js';
+import {
+  fetchHelp,
+  fetchHelpDetailed,
+  fetchVersionInfo,
+  resolveWindowsCommand,
+  validateExecutablePath,
+} from '../src/help_source.js';
 import { complete } from '../src/ai_client.js';
 import { completeFree } from '../src/free_client.js';
 import { readCache, writeCache, clearCache, hashHelp } from '../src/cache.js';
@@ -49,6 +62,10 @@ import { run } from '../src/cli.js';
 
 const loadConfigMock = vi.mocked(loadConfig);
 const fetchHelpMock = vi.mocked(fetchHelp);
+const fetchHelpDetailedMock = vi.mocked(fetchHelpDetailed);
+const resolveWindowsCommandMock = vi.mocked(resolveWindowsCommand);
+const fetchVersionInfoMock = vi.mocked(fetchVersionInfo);
+const validateExecutablePathMock = vi.mocked(validateExecutablePath);
 const completeMock = vi.mocked(complete);
 const completeFreeMock = vi.mocked(completeFree);
 const getLangMock = vi.mocked(getLang);
@@ -91,6 +108,12 @@ describe('run', () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
     fetchHelpMock.mockReset();
+    fetchHelpDetailedMock.mockReset();
+    resolveWindowsCommandMock.mockReset();
+    fetchVersionInfoMock.mockReset();
+    validateExecutablePathMock.mockReset();
+    resolveWindowsCommandMock.mockResolvedValue([]);
+    fetchVersionInfoMock.mockResolvedValue(new Map());
     completeMock.mockReset();
     completeFreeMock.mockReset();
     getLangMock.mockReturnValue('cn');
@@ -602,6 +625,118 @@ describe('run', () => {
     const code = await run(['如何', '使用', 'git', 'clone']);
     expect(code).toBe(0);
     expect(fetchHelpMock).not.toHaveBeenCalled();
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+});
+
+describe('Windows 同名命令（agy 重名问题）', () => {
+  const realPlatform = process.platform;
+  beforeEach(() => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    loadConfigMock.mockReset();
+    loadConfigMock.mockReturnValue(CONFIG);
+    fetchHelpMock.mockReset();
+    fetchHelpDetailedMock.mockReset();
+    resolveWindowsCommandMock.mockReset();
+    fetchVersionInfoMock.mockReset();
+    fetchVersionInfoMock.mockResolvedValue(new Map());
+    validateExecutablePathMock.mockReset();
+    completeMock.mockReset();
+    completeFreeMock.mockReset();
+    getLangMock.mockReset();
+    getLangMock.mockReturnValue('cn');
+    setLangMock.mockReset();
+    getModeMock.mockReset();
+    getModeMock.mockReturnValue('custom');
+    setModeMock.mockReset();
+    readCacheMock.mockReset();
+    readCacheMock.mockReturnValue(null);
+    writeCacheMock.mockReset();
+    clearCacheMock.mockReset();
+    spawnMock.mockReset();
+  });
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  });
+
+  it('多候选非交互：默认 PATH 第一个并告警，不执行目标', async () => {
+    const first = 'C:\\old\\agy.exe';
+    resolveWindowsCommandMock.mockResolvedValue([
+      { source: first, commandType: 'Application' },
+      { source: 'D:\\antigravity\\agy.exe', commandType: 'Application' },
+    ]);
+    fetchHelpDetailedMock.mockResolvedValue({
+      help: 'OLD HELP',
+      candidates: [],
+      chosenSource: first,
+      sourceNote: '【命令解析】本次所选',
+      authoritative: false,
+    });
+    completeMock.mockResolvedValue('### 功能\n解释');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['agy']);
+    expect(code).toBe(0);
+    expect(fetchHelpDetailedMock).toHaveBeenCalledWith('agy', { pinnedPath: first, runHelp: false });
+    expect(fetchHelpMock).not.toHaveBeenCalled();
+    const err = lines.join('\n');
+    expect(err).toContain('2 个同名命令');
+    const messages = completeMock.mock.calls[0]![1] as Array<{ content: string }>;
+    expect(messages[1].content).toContain('【命令解析】本次所选');
+    expect(writeCacheMock.mock.calls[0]![0].source).toBe(first);
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('单候选 + /?：走加固 detail，不走传统三级', async () => {
+    const only = 'D:\\antigravity\\agy.exe';
+    resolveWindowsCommandMock.mockResolvedValue([{ source: only, commandType: 'Application' }]);
+    fetchHelpDetailedMock.mockResolvedValue({
+      help: 'ANTIGRAVITY HELP',
+      candidates: [],
+      chosenSource: only,
+      sourceNote: null,
+      authoritative: true,
+    });
+    completeMock.mockResolvedValue('### 功能\n解释');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['agy', '/?']);
+    expect(code).toBe(0);
+    expect(fetchHelpDetailedMock).toHaveBeenCalledWith('agy', { pinnedPath: only, runHelp: true });
+    expect(fetchHelpMock).not.toHaveBeenCalled();
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('完整路径 pin：缓存键隔离且传给 detail', async () => {
+    const pinned = 'D:\\antigravity\\agy.exe';
+    validateExecutablePathMock.mockReturnValue({ ok: true });
+    fetchHelpDetailedMock.mockResolvedValue({
+      help: 'ANTIGRAVITY HELP',
+      candidates: [],
+      chosenSource: pinned,
+      sourceNote: null,
+      authoritative: true,
+    });
+    completeMock.mockResolvedValue('### 功能\n解释');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run([pinned]);
+    expect(code).toBe(0);
+    expect(fetchHelpDetailedMock).toHaveBeenCalledWith('agy', { pinnedPath: pinned, runHelp: false });
+    const written = writeCacheMock.mock.calls[0]![0];
+    expect(written.command).toContain('agy__@');
+    expect(written.source).toBe(pinned);
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('含空格的 Windows 路径不被当成自然语言', async () => {
+    validateExecutablePathMock.mockReturnValue({ ok: false, reason: '文件不存在' });
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['C:\\Program Files\\agy\\agy.exe']);
+    expect(code).toBe(2);
+    expect(completeMock).not.toHaveBeenCalled();
+    expect(lines.join('\n')).toContain('完整路径无效');
     spy.mockRestore();
     errSpy.mockRestore();
   });

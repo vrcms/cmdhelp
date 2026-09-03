@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractCommand } from '../src/tokenize.js';
+import { extractCommand, extractTarget } from '../src/tokenize.js';
 
 describe('extractCommand', () => {
   it('取首个 token 并忽略其余参数', () => {
@@ -39,5 +39,34 @@ describe('extractCommand', () => {
     expect(extractCommand('man')).toBe('man');
     expect(extractCommand('python3.12')).toBe('python3.12');
     expect(extractCommand('docker-compose')).toBe('docker-compose');
+  });
+});
+describe('extractTarget', () => {
+  it('普通命令：无路径、无 /? 意图', () => {
+    expect(extractTarget(['agy'])).toEqual({ name: 'agy', fullPath: null, runHelp: false });
+  });
+
+  it('尾随 /?/-?/--help/--run-help 视为显式取帮助意图', () => {
+    expect(extractTarget(['agy', '/?'])?.runHelp).toBe(true);
+    expect(extractTarget(['agy', '-?'])?.runHelp).toBe(true);
+    expect(extractTarget(['agy', '--help'])?.runHelp).toBe(true);
+    expect(extractTarget(['agy', '--run-help'])?.runHelp).toBe(true);
+    expect(extractTarget(['agy', '-p'])?.runHelp).toBe(false);
+  });
+
+  it('完整路径：pin 文件并取 basename 当命令名', () => {
+    const t = extractTarget(['C:\\tools\\agy.exe']);
+    expect(t?.fullPath).toBe('C:\\tools\\agy.exe');
+    expect(t?.name).toBe('agy');
+  });
+
+  it('拒绝目录穿越与超长路径', () => {
+    expect(extractTarget(['..\\agy.exe'])).toBeNull();
+    expect(extractTarget([`C:\\${'a'.repeat(300)}.exe`])).toBeNull();
+  });
+
+  it('非法命令名仍拒绝', () => {
+    expect(extractTarget(['-rf', '/'])).toBeNull();
+    expect(extractTarget([])).toBeNull();
   });
 });

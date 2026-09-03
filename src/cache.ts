@@ -7,6 +7,8 @@ export interface CacheEntry {
   command: string;
   lang: string;
   mode: string;
+  /** Windows 同名解析后实际选定的完整路径（按名查询/旧缓存为 null） */
+  source?: string | null;
   help: string | null;
   explanation: string;
   helpHash: string;
