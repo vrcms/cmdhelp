@@ -105,7 +105,10 @@ function capture(prefix: string): unknown[] {
 }
 
 describe('run', () => {
+  const realPlatform = process.platform;
   beforeEach(() => {
+    // 通用用例固定为 POSIX 语义；Windows 专属行为在下方同名 describe 里测
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
     loadConfigMock.mockReset();
     fetchHelpMock.mockReset();
     fetchHelpDetailedMock.mockReset();
@@ -124,6 +127,9 @@ describe('run', () => {
     writeCacheMock.mockReset();
     clearCacheMock.mockReset();
     spawnMock.mockReset();
+  });
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   });
 
   it('坏输入：拒绝并解释白名单规则', async () => {
@@ -677,7 +683,7 @@ describe('Windows 同名命令（agy 重名问题）', () => {
     const [lines, spy, errSpy] = capture('ERR:');
     const code = await run(['agy']);
     expect(code).toBe(0);
-    expect(fetchHelpDetailedMock).toHaveBeenCalledWith('agy', { pinnedPath: first, runHelp: false });
+    expect(fetchHelpDetailedMock).toHaveBeenCalledWith('agy', { pinnedPath: first, runHelp: false, consent: false });
     expect(fetchHelpMock).not.toHaveBeenCalled();
     const err = lines.join('\n');
     expect(err).toContain('2 个同名命令');
@@ -702,7 +708,7 @@ describe('Windows 同名命令（agy 重名问题）', () => {
     const [lines, spy, errSpy] = capture('ERR:');
     const code = await run(['agy', '/?']);
     expect(code).toBe(0);
-    expect(fetchHelpDetailedMock).toHaveBeenCalledWith('agy', { pinnedPath: only, runHelp: true });
+    expect(fetchHelpDetailedMock).toHaveBeenCalledWith('agy', { pinnedPath: only, runHelp: true, consent: true });
     expect(fetchHelpMock).not.toHaveBeenCalled();
     spy.mockRestore();
     errSpy.mockRestore();
@@ -722,7 +728,7 @@ describe('Windows 同名命令（agy 重名问题）', () => {
     const [lines, spy, errSpy] = capture('ERR:');
     const code = await run([pinned]);
     expect(code).toBe(0);
-    expect(fetchHelpDetailedMock).toHaveBeenCalledWith('agy', { pinnedPath: pinned, runHelp: false });
+    expect(fetchHelpDetailedMock).toHaveBeenCalledWith('agy', { pinnedPath: pinned, runHelp: false, consent: true });
     const written = writeCacheMock.mock.calls[0]![0];
     expect(written.command).toContain('agy__@');
     expect(written.source).toBe(pinned);
@@ -737,6 +743,56 @@ describe('Windows 同名命令（agy 重名问题）', () => {
     expect(code).toBe(2);
     expect(completeMock).not.toHaveBeenCalled();
     expect(lines.join('\n')).toContain('完整路径无效');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('exe 无本地帮助（非交互）：不执行程序，提示 /? 用法，AI 收到防编造备注', async () => {
+    const only = 'D:\\antigravity\\agy.exe';
+    resolveWindowsCommandMock.mockResolvedValue([{ source: only, commandType: 'Application' }]);
+    fetchHelpMock.mockResolvedValue(null);
+    completeMock.mockResolvedValue('### 功能\n不确定');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['agy']);
+    expect(code).toBe(0);
+    const err = lines.join('\n');
+    expect(err).toContain('没有本地帮助文本');
+    expect(err).toContain('agy /?');
+    expect(fetchHelpDetailedMock).not.toHaveBeenCalled();
+    const messages = completeMock.mock.calls[0]![1] as Array<{ content: string }>;
+    expect(messages[1].content).toContain('【命令解析】');
+    expect(messages[1].content).toContain(only);
+    expect(messages[1].content).toContain('不要编造');
+    expect(writeCacheMock.mock.calls[0]![0].source).toBe(only);
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('旧版缓存（无 source 字段）在 Windows 下强制重新生成', async () => {
+    readCacheMock.mockReturnValue({ ...CACHED, command: 'agy', source: undefined });
+    resolveWindowsCommandMock.mockResolvedValue([{ source: 'D:\\antigravity\\agy.exe', commandType: 'Application' }]);
+    fetchHelpMock.mockResolvedValue('REAL HELP');
+    completeMock.mockResolvedValue('### 功能\n解释');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['agy']);
+    expect(code).toBe(0);
+    expect(lines.join('\n')).toContain('旧版缓存');
+    expect(completeMock).toHaveBeenCalledTimes(1);
+    expect(writeCacheMock.mock.calls[0]![0].source).toBe('D:\\antigravity\\agy.exe');
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it('缓存 source 为空但本机现在能解析到候选 → 重新生成', async () => {
+    readCacheMock.mockReturnValue({ ...CACHED, command: 'agy', source: null });
+    resolveWindowsCommandMock.mockResolvedValue([{ source: 'D:\\antigravity\\agy.exe', commandType: 'Application' }]);
+    fetchHelpMock.mockResolvedValue('REAL HELP');
+    completeMock.mockResolvedValue('### 功能\n解释');
+    const [lines, spy, errSpy] = capture('ERR:');
+    const code = await run(['agy']);
+    expect(code).toBe(0);
+    expect(lines.join('\n')).toContain('指向已变化');
+    expect(completeMock).toHaveBeenCalledTimes(1);
     spy.mockRestore();
     errSpy.mockRestore();
   });

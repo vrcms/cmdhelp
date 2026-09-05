@@ -260,6 +260,32 @@ describe('同名定位 helpers', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it('fetchHelpDetailed pin exe + 同意：加固执行取真实帮助（权威）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cmdhelp-test-'));
+    const exe = join(dir, 'agy.exe');
+    writeFileSync(exe, 'MZ-fake', 'utf8');
+    spawnMock.mockReturnValue(makeChild({ data: ['REAL USAGE\n'], exitCode: 0 }));
+    const detail = await fetchHelpDetailed('agy', { pinnedPath: exe, consent: true });
+    expect(detail.help).toContain('REAL USAGE');
+    expect(detail.authoritative).toBe(true);
+    expect(detail.chosenSource).toBe(exe);
+    expect(spawnMock).toHaveBeenCalledTimes(2); // --help 与 /? 双试
+    expect(spawnMock.mock.calls[0]![0]).toBe(exe);
+  });
+
+  it('fetchHelpDetailed pin exe 未同意：不执行目标，走传统三级', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cmdhelp-test-'));
+    const exe = join(dir, 'agy.exe');
+    writeFileSync(exe, 'MZ-fake', 'utf8');
+    spawnMock.mockReturnValue(makeChild({ exitCode: 0 })); // 传统链路 help/man/Get-Help 全无输出
+    const detail = await fetchHelpDetailed('agy', { pinnedPath: exe });
+    expect(detail.help).toBeNull();
+    expect(detail.authoritative).toBe(false);
+    expect(detail.chosenSource).toBe(exe);
+    const spawned = spawnMock.mock.calls.map((c) => c[0]);
+    expect(spawned).not.toContain(exe);
+  });
+
   it('runExeHelp：两种帮助约定都试并择优（长者胜），cwd 隔离且 PATH 收敛', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cmdhelp-test-'));
     const exe = join(dir, 'agy.exe');

@@ -254,12 +254,12 @@ export function buildSourceNote(
 
 /**
  * 带解析的帮助获取（Windows 同名问题的入口）。
- * 规则：pin 脚本→读文件；pin 的 exe + runHelp→加固跑 /?；
- * 单候选 + runHelp→跑该候选 /?；其余全部走传统三级（不执行目标）。
+ * 规则：pin 脚本→读文件；选定 exe 且用户同意（显式 /?、输入完整路径、征询答 y）→加固执行取真实帮助；
+ * 其余全部走传统三级（不执行目标）。
  */
 export async function fetchHelpDetailed(
   name: string,
-  opts: { pinnedPath?: string; runHelp?: boolean } = {},
+  opts: { pinnedPath?: string; runHelp?: boolean; consent?: boolean } = {},
 ): Promise<HelpDetail> {
   const empty: HelpDetail = { help: null, candidates: [], chosenSource: null, sourceNote: null, authoritative: false };
   if (process.platform !== 'win32') {
@@ -278,8 +278,8 @@ export async function fetchHelpDetailed(
       return { help: script, candidates, chosenSource: chosen, sourceNote: note, authoritative: true };
     }
   }
-  // 显式 /?：只对选定的 exe 跑加固 /?
-  if (opts.runHelp && chosen) {
+  // 用户同意执行的（显式 /? / 输入完整路径 / 征询答 y）：exe 加固执行读取真实帮助
+  if (chosen && (opts.runHelp || opts.consent)) {
     const out = await runExeHelp(chosen);
     if (out) {
       const note = buildSourceNote(name, candidates, chosen, true);

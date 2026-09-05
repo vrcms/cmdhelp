@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
+import { extname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnUpdateCheck } from './update.js';
 import { VERSION } from './version.js';
@@ -126,22 +127,16 @@ export async function run(argv: string[]): Promise<number> {
 
   const cacheCommand = target.fullPath || target.runHelp ? cacheKeyFor(command, target.fullPath) : command;
   const cached = readCache(cacheKey(cacheCommand, getLang(), getMode()));
-  // Windows 重名校验：缓存里记的所选程序若已不在本机候选中（重装/换 PATH 顺序），视为失效重新生成
-  const cachedSource = cached?.source ?? null;
-  if (cached && cachedSource && process.platform === 'win32') {
-    const now = await safeResolve(command);
-    const stillThere = target.fullPath
-      ? cachedSource.toLowerCase() === target.fullPath.toLowerCase()
-      : now.some((c) => c.source.toLowerCase() === cachedSource.toLowerCase());
-    if (!stillThere) {
-      process.stderr.write('（检测到同名命令指向已变化，重新生成…）\n');
+  if (cached) {
+    // Windows 校验缓存绑定的程序是否仍有效：失效（含旧版无 source 字段）则重新生成
+    const now = process.platform === 'win32' ? await safeResolve(command) : [];
+    const mismatch = cacheSourceMismatch(cached, target.fullPath ?? null, now);
+    if (mismatch) {
+      process.stderr.write(`${mismatch}\n`);
     } else {
       const done = await printCachedAndMaybeInteract(cached, command);
       if (done !== null) return done;
     }
-  } else if (cached) {
-    const done = await printCachedAndMaybeInteract(cached, command);
-    if (done !== null) return done;
   }
 
   const ai = resolveAi();
@@ -205,6 +200,58 @@ async function safeResolve(command: string): Promise<CommandCandidate[]> {
     return (await resolveWindowsCommand(command)) ?? [];
   } catch {
     return [];
+  }
+}
+
+/** 缓存与当前系统是否仍指向同一程序；不匹配返回提示文案（Windows 专用，其他平台恒 null） */
+function cacheSourceMismatch(
+  cached: { source?: string | null },
+  fullPath: string | null,
+  now: CommandCandidate[],
+): string | null {
+  if (process.platform !== 'win32') return null;
+  const changed = '（检测到同名命令指向已变化，重新生成…）';
+  if (fullPath) {
+    return cached.source && cached.source.toLowerCase() === fullPath.toLowerCase() ? null : changed;
+  }
+  // 旧版缓存（0.1.19 前）没有 source 字段，无法确认指向，强制重新解析一次自愈
+  if (cached.source === undefined) return '（检测到旧版缓存，重新解析命令…）';
+  if (now.length === 0) return cached.source ? changed : null;
+  const ok = Boolean(cached.source) && now.some((c) => c.source.toLowerCase() === cached.source!.toLowerCase());
+  return ok ? null : changed;
+}
+
+function isExeFile(path: string): boolean {
+  return ['.exe', '.com'].includes(extname(path).toLowerCase());
+}
+
+function isScriptFile(path: string): boolean {
+  return ['.bat', '.cmd', '.ps1'].includes(extname(path).toLowerCase());
+}
+
+/** exe 无本地帮助时的征询门：同意后才走 runExeHelp 加固执行；非交互只给提示，绝不静默执行 */
+async function offerHardenedHelp(command: string, source: string): Promise<boolean> {
+  const nonInteractive =
+    !stdin.isTTY || !stdout.isTTY || process.env.CMDHELP_NO_INTERACTIVE === '1' || Boolean(process.env.CI);
+  if (nonInteractive) {
+    process.stderr.write(
+      `（${command} 没有本地帮助文本。要直接读取该程序真实帮助：cmdhelp ${command} /? ，或 cmdhelp "${source}"）\n`,
+    );
+    return false;
+  }
+  process.stdout.write(
+    `${command} 没有本地帮助文本（help/man/Get-Help 均未提供）。\n` +
+      `是否以加固方式运行该程序的帮助参数（--help，必要时 /?）来读取真实帮助？\n` +
+      `（完整路径直调、不经 shell、stdin 关闭、空临时目录、最小环境变量、5 秒超时；仅本次运行）\n`,
+  );
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    const answer = (await rl.question('y = 读取真实帮助 / 回车跳过：')).trim().toLowerCase();
+    return answer === 'y' || answer === 'yes';
+  } catch {
+    return false;
+  } finally {
+    rl.close();
   }
 }
 
@@ -332,16 +379,30 @@ async function explain(
   helpOpts: { runHelp?: boolean; pinnedPath?: string | null; cacheCommand?: string } = {},
 ): Promise<number> {
   const lang = getLang();
-  const stop = startSpinner(`正在查询本地帮助（${command}）…`);
+  let stop = startSpinner(`正在查询本地帮助（${command}）…`);
+  let spinning = true;
+  const stopSpin = (): void => {
+    if (spinning) {
+      stop();
+      spinning = false;
+    }
+  };
+  const startSpin = (message: string): void => {
+    stopSpin();
+    stop = startSpinner(message);
+    spinning = true;
+  };
   // Windows 同名处理：pin 路径直接用；多候选二选一；单候选/失败走传统链路（行为不变）
+  const explicitPin = Boolean(helpOpts.pinnedPath) || Boolean(helpOpts.runHelp);
   let candidates: CommandCandidate[] = [];
   let pinned: string | null = helpOpts.pinnedPath ?? null;
   if (process.platform === 'win32' && !pinned) {
     candidates = await safeResolve(command);
     if (candidates.length > 1) {
-      stop();
+      stopSpin();
       pinned = await selectCandidate(command, candidates);
       if (!pinned) return EXIT_FAIL;
+      startSpin(helpOpts.runHelp ? `正在读取所选程序帮助（${command}）…` : `正在查询本地帮助（${command}）…`);
     } else if (candidates.length === 1 && helpOpts.runHelp) {
       // 单候选 + 显式 /?：直接 pin，避免 detail 里重复解析跑两次
       pinned = candidates[0]!.source;
@@ -349,19 +410,47 @@ async function explain(
   }
   const canDetail = typeof fetchHelpDetailed === 'function';
   const needDetail = Boolean(pinned || helpOpts.runHelp) && canDetail;
-  const detail = needDetail
-    ? await fetchHelpDetailed(command, { pinnedPath: pinned ?? undefined, runHelp: helpOpts.runHelp })
+  // 用户输入完整路径或显式 /? 即为同意执行（红线约定）；菜单选择的不算，缺帮助时再走征询门
+  let detail = needDetail
+    ? await fetchHelpDetailed(command, {
+        pinnedPath: pinned ?? undefined,
+        runHelp: helpOpts.runHelp,
+        consent: explicitPin,
+      })
     : null;
-  if (!needDetail) stop();
-  const help = detail ? detail.help : await fetchHelp(command);
-  if (needDetail) stop();
-  // 单候选时也记下 source，供下次校验 PATH 是否变化；传统链路 help 不变
-  const singleSource = !pinned && candidates.length === 1 ? candidates[0]!.source : null;
-  const chosenSource = detail ? detail.chosenSource : singleSource;
-  const sourceNote = detail ? detail.sourceNote : null;
+  let help = detail ? detail.help : await fetchHelp(command);
+  stopSpin();
+
+  // 本地帮助缺失的兜底：解析到了具体程序就尽量拿到真实内容——
+  // 脚本型直接读文件（只读安全，无需征询）；exe 需征询同意后才加固执行（默认绝不执行）
+  if (!help && process.platform === 'win32' && !explicitPin && canDetail) {
+    const source = pinned ?? candidates[0]?.source ?? null;
+    if (source && isScriptFile(source)) {
+      const spin = startSpinner(`正在读取脚本内容（${command}）…`);
+      detail = await fetchHelpDetailed(command, { pinnedPath: source });
+      spin();
+    } else if (source && isExeFile(source)) {
+      if (await offerHardenedHelp(command, source)) {
+        const spin = startSpinner(`正在读取真实帮助（${command}）…`);
+        detail = await fetchHelpDetailed(command, { pinnedPath: source, consent: true });
+        spin();
+      }
+    }
+    if (detail?.help) help = detail.help;
+  }
+
+  const chosenSource = detail ? detail.chosenSource : !pinned && candidates.length === 1 ? candidates[0]!.source : null;
+  let sourceNote = detail ? detail.sourceNote : null;
+  if (!sourceNote && !help && chosenSource) {
+    // 本地帮助确实拿不到：给 AI 明确的防编造备注，避免把不相关的同名软件当成答案
+    sourceNote =
+      `【命令解析】目标程序已解析为 ${chosenSource}，但未能读取其本地帮助文本（该程序不提供 help/man/Get-Help 帮助）。\n` +
+      `要求：不要编造该程序的具体参数或子命令；若无法仅凭命令名可靠判断该程序是什么，请明确说明不确定，` +
+      `并建议用户运行 cmdhelp ${command} /? 或 cmdhelp "${chosenSource}" 获取真实帮助。`;
+  }
   if (detail?.authoritative && detail.chosenSource) {
     process.stderr.write(`（已定位到 ${detail.chosenSource}，帮助来自该程序本身）\n`);
-  } else if (detail && candidates.length > 1) {
+  } else if (detail && detail.candidates.length > 1 && !detail.authoritative) {
     process.stderr.write(`（按名查到的帮助可能属于另一个同名程序，已要求 AI 以所选程序为准）\n`);
   }
 
@@ -643,7 +732,7 @@ async function printUsage(): Promise<void> {
 
 说明：查询会给出 AI 总结（功能/常用参数/常用范例/特别提示），支持交互式追问（基于完整帮助原文，防上下文爆炸）。
   追问时会保留完整帮助上下文，例如：cmdhelp ssh 后可继续问“-p 参数原文是什么样的”。
-  Windows 下同名命令（如 agy 有新老两个）会自动列出候选让你选；只有当你明确写 /? 时才会执行所选程序取帮助。
+  Windows 下同名命令（如 agy 有新老两个）会自动列出候选让你选；只有当你明确写 /? 或在征询时回答 y 才会执行所选程序取帮助（exe 无本地帮助文本时会先问你）。
   免费模式受限流影响，查不到时可 setup 配置其他服务。
   查询结果会缓存，再次运行时秒出旧结果并后台校验帮助是否有变化。
   当前通过 npx 运行；想直接用 cmdhelp 命令（免 npx 前缀），可全局安装：npm i -g cmdhelp
